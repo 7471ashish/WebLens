@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches and test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+scratch/
+*.log
+
+# Environments, Secrets & IDE
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+.venv/
+venv/
+ENV/
+env/
+node_modules/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build & Submission Staging Artifacts
+build/
+dist/
+submission/
+*.zip
+*.tar.gz
