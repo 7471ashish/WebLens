@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebLens Settings</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 30px 16px;
+    }
+    .settings-container {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-box {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .input-row {
+      display: flex;
+      position: relative;
+    }
+    input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 40px 10px 12px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus {
+      border-color: var(--primary);
+    }
+    .toggle-pwd-btn {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+    }
+    .toggle-pwd-btn:hover {
+      color: var(--text);
+    }
+    .help-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .help-text a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+    .help-text a:hover {
+      text-decoration: underline;
+    }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .btn {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      flex: 1;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: #252f44;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+    .status-badge.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .status-badge.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      background: #10b981;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="settings-container">
+    <div class="header">
+      <div class="logo-box">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </div>
+      <div>
+        <h1 class="title">WebLens Settings</h1>
+        <p class="subtitle">Configure AI credentials and backend connectivity</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <!-- Groq API Key -->
+      <div class="form-group">
+        <label for="groq-key-input">Groq Cloud API Key</label>
+        <div class="input-row">
+          <input type="password" id="groq-key-input" placeholder="gsk_..." autocomplete="off">
+          <button type="button" class="toggle-pwd-btn" id="toggle-pwd-btn" title="Toggle visibility">
+            <svg id="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+        <p class="help-text">
+          Obtain a free high-throughput API key from the
+          <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Cloud Console</a>.
+          Your key is saved locally in <code>chrome.storage.local</code> and transmitted per-request directly to the backend.
+        </p>
+      </div>
+
+      <!-- Backend API URL -->
+      <div class="form-group">
+        <label for="backend-url-input">Backend Service Endpoint</label>
+        <div class="input-row">
+          <input type="url" id="backend-url-input" placeholder="http://localhost:8000" autocomplete="off">
+        </div>
+        <p class="help-text">
+          Default is <code>http://localhost:8000</code>. Point to your containerized deployment or remote domain.
+        </p>
+      </div>
+
+      <div id="connection-status" class="status-badge hidden"></div>
+
+      <!-- Action Buttons -->
+      <div class="btn-row">
+        <button id="test-connection-btn" class="btn btn-secondary">Test Connection</button>
+        <button id="save-btn" class="btn btn-primary">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Settings saved successfully!</div>
+
+  <script src="options.js" type="module"></script>
+</body>
+</html>
