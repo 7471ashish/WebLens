@@ -5,6 +5,7 @@
   "description": "Autonomous technical website audit: AI discoverability, WCAG accessibility, rendering, and engagement friction.",
   "permissions": [
     "activeTab",
+    "tabs",
     "storage",
     "notifications",
     "sidePanel"
@@ -30,10 +31,6 @@
   },
   "side_panel": {
     "default_path": "side_panel.html"
-  },
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": false
   },
   "icons": {
     "16": "icons/icon16.png",

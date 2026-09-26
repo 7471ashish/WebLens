@@ -9,8 +9,3 @@ document.getElementById("open-panel-btn").addEventListener("click", async () => 
   }
   window.close();
 });
-
-document.getElementById("open-options-btn").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
-  window.close();
-});

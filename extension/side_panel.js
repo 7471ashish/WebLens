@@ -16,6 +16,16 @@ const startAuditBtn = document.getElementById("start-audit-btn");
 const auditSpinner = document.getElementById("audit-spinner");
 const btnText = document.getElementById("btn-text");
 
+// Inline Settings Panel Elements (replaces the old separate options page)
+const settingsPanel = document.getElementById("settings-panel");
+const closeSettingsBtn = document.getElementById("close-settings-btn");
+const groqKeyInput = document.getElementById("groq-key-input");
+const togglePwdBtn = document.getElementById("toggle-pwd-btn");
+const backendUrlInput = document.getElementById("backend-url-input");
+const testConnectionBtn = document.getElementById("test-connection-btn");
+const saveSettingsBtn = document.getElementById("save-settings-btn");
+const connectionStatus = document.getElementById("connection-status");
+
 // Progress Elements
 const progressSection = document.getElementById("progress-section");
 const progressStageTag = document.getElementById("progress-stage-tag");
@@ -23,6 +33,7 @@ const progressPercent = document.getElementById("progress-percent");
 const progressTimer = document.getElementById("progress-timer");
 const progressFill = document.getElementById("progress-fill");
 const progressMessage = document.getElementById("progress-message");
+const stopAuditBtn = document.getElementById("stop-audit-btn");
 
 // Error Elements
 const errorSection = document.getElementById("error-section");
@@ -59,13 +70,16 @@ let activeSearchQuery = "";
 let auditStartTime = null;
 let timerInterval = null;
 let activeEventSource = null;
+let isAuditRunning = false;
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", async () => {
   setupEventListeners();
   await checkConfiguredKey();
-  await syncActiveTabUrl();
   await restorePreviousSession();
+  if (!isAuditRunning) {
+    await syncActiveTabUrl();
+  }
 });
 
 // Listen for updates from background service worker
@@ -76,11 +90,26 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 function setupEventListeners() {
-  openSettingsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
-  bannerConfigBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  openSettingsBtn.addEventListener("click", openSettingsPanel);
+  bannerConfigBtn.addEventListener("click", openSettingsPanel);
+  closeSettingsBtn.addEventListener("click", closeSettingsPanel);
+  togglePwdBtn.addEventListener("click", togglePasswordVisibility);
+  testConnectionBtn.addEventListener("click", testBackendConnection);
+  saveSettingsBtn.addEventListener("click", saveSettings);
   syncTabBtn.addEventListener("click", syncActiveTabUrl);
   startAuditBtn.addEventListener("click", initiateAudit);
   retryAuditBtn.addEventListener("click", initiateAudit);
+  stopAuditBtn.addEventListener("click", stopAudit);
+
+  // Keep the target URL synced to whatever the browser's address bar shows,
+  // even while the side panel stays open across tab switches/navigations —
+  // but never while an audit is actively running (see syncActiveTabUrl).
+  chrome.tabs.onActivated.addListener(syncActiveTabUrl);
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.url && tab.active) {
+      syncActiveTabUrl();
+    }
+  });
 
   // Severity Filter Pills
   severityPills.forEach((pill) => {
@@ -113,6 +142,57 @@ function setupEventListeners() {
   });
 }
 
+async function openSettingsPanel() {
+  const { groq_api_key, backend_url } = await chrome.storage.local.get([
+    "groq_api_key",
+    "backend_url",
+  ]);
+  groqKeyInput.value = groq_api_key || "";
+  backendUrlInput.value = backend_url || DEFAULT_BACKEND_URL;
+  connectionStatus.classList.add("hidden");
+  settingsPanel.classList.remove("hidden");
+}
+
+function closeSettingsPanel() {
+  settingsPanel.classList.add("hidden");
+}
+
+function togglePasswordVisibility() {
+  const isPassword = groqKeyInput.type === "password";
+  groqKeyInput.type = isPassword ? "text" : "password";
+}
+
+async function testBackendConnection() {
+  const targetUrl = (backendUrlInput.value.trim() || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+  connectionStatus.className = "status-badge";
+  connectionStatus.textContent = "Connecting to backend...";
+  connectionStatus.classList.remove("hidden");
+
+  try {
+    const resp = await fetch(`${targetUrl}/health`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    connectionStatus.className = "status-badge success";
+    connectionStatus.textContent = `Connected! Backend ready (Playwright: ${data.playwright_ready ? "Ready" : "Offline fallback"}, Slots: ${data.max_concurrent_jobs})`;
+  } catch (err) {
+    connectionStatus.className = "status-badge error";
+    connectionStatus.textContent = `Connection failed: ${err.message}. Ensure backend is running.`;
+  }
+}
+
+async function saveSettings() {
+  const key = groqKeyInput.value.trim();
+  const url = (backendUrlInput.value.trim() || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+
+  await chrome.storage.local.set({
+    groq_api_key: key,
+    backend_url: url,
+  });
+
+  await checkConfiguredKey();
+  closeSettingsPanel();
+}
+
 async function checkConfiguredKey() {
   const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
   if (!groq_api_key || !groq_api_key.trim()) {
@@ -123,6 +203,7 @@ async function checkConfiguredKey() {
 }
 
 async function syncActiveTabUrl() {
+  if (isAuditRunning) return; // Never move the target URL while an audit is in flight.
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url && (tab.url.startsWith("http://") || tab.url.startsWith("https://"))) {
@@ -143,11 +224,12 @@ async function restorePreviousSession() {
     "active_job_url",
   ]);
 
-  if (stored.active_job_url && !targetUrlInput.value) {
-    targetUrlInput.value = stored.active_job_url;
-  }
-
   if (stored.active_job_status === "running" || stored.active_job_status === "queued") {
+    // A job is genuinely still in flight — keep watching it, and keep the
+    // URL pinned to whatever it's auditing rather than the active tab.
+    if (stored.active_job_url) {
+      targetUrlInput.value = stored.active_job_url;
+    }
     showRunningState();
     if (stored.active_job_progress) {
       updateProgressDisplay(stored.active_job_progress);
@@ -157,10 +239,16 @@ async function restorePreviousSession() {
       const activeBackend = (backend_url || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
       connectSSE(stored.active_job_id, activeBackend);
     }
-  } else if (stored.active_job_status === "done" && stored.active_job_result) {
-    renderAuditResult(stored.active_job_result);
-  } else if (stored.active_job_status === "failed") {
-    showError(stored.active_job_error || "Previous audit encountered an error.");
+  } else if (stored.active_job_status === "done" || stored.active_job_status === "failed") {
+    // Don't surface results/errors from a previous audit — start fresh each
+    // time the panel opens. Clear the stale job state so it doesn't reappear.
+    await chrome.storage.local.set({
+      active_job_id: null,
+      active_job_status: null,
+      active_job_progress: null,
+      active_job_result: null,
+      active_job_error: null,
+    });
   }
 }
 
@@ -219,6 +307,46 @@ async function initiateAudit() {
   } catch (err) {
     showError(err.message || "Failed to contact WebLens backend.");
   }
+}
+
+/**
+ * Ask the backend to cancel the in-flight job, tear down the local SSE
+ * stream, and reset the panel to idle. Assumes a POST
+ * `${backendUrl}/audits/{job_id}/cancel` endpoint -- adjust the path here if
+ * your backend exposes cancellation differently.
+ */
+async function stopAudit() {
+  const { active_job_id, backend_url } = await chrome.storage.local.get([
+    "active_job_id",
+    "backend_url",
+  ]);
+  const activeBackend = (backend_url || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
+  }
+
+  if (active_job_id) {
+    try {
+      await fetch(`${activeBackend}/audits/${encodeURIComponent(active_job_id)}/cancel`, {
+        method: "POST",
+      });
+    } catch (err) {
+      console.warn("[WebLens] Failed to notify backend of cancellation:", err);
+    }
+  }
+
+  await chrome.storage.local.set({
+    active_job_id: null,
+    active_job_status: null,
+    active_job_progress: null,
+    active_job_result: null,
+    active_job_error: null,
+  });
+
+  stopTimer();
+  hideRunningState();
 }
 
 function handleJobUpdate(job) {
@@ -328,7 +456,9 @@ function connectSSE(jobId, backendUrl) {
 }
 
 function showRunningState() {
+  isAuditRunning = true;
   startAuditBtn.disabled = true;
+  syncTabBtn.disabled = true;
   auditSpinner.classList.remove("hidden");
   btnText.textContent = "Auditing...";
   progressSection.classList.remove("hidden");
@@ -343,7 +473,9 @@ function showRunningState() {
 }
 
 function hideRunningState() {
+  isAuditRunning = false;
   startAuditBtn.disabled = false;
+  syncTabBtn.disabled = false;
   auditSpinner.classList.add("hidden");
   btnText.textContent = "Audit This Page";
   progressSection.classList.add("hidden");

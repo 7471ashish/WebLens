@@ -31,6 +31,50 @@
       </button>
     </header>
 
+    <!-- Inline Settings Panel (replaces the old separate options page) -->
+    <section id="settings-panel" class="settings-panel hidden">
+      <div class="settings-panel-header">
+        <h2 class="settings-title">Settings</h2>
+        <button id="close-settings-btn" class="icon-button" title="Close settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="input-group">
+        <label for="groq-key-input">Groq Cloud API Key</label>
+        <div class="input-with-action">
+          <input type="password" id="groq-key-input" placeholder="gsk_..." autocomplete="off" spellcheck="false">
+          <button type="button" class="action-btn-sm" id="toggle-pwd-btn" title="Toggle visibility">
+            <svg id="eye-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+        <p class="help-text">
+          Get a free high-throughput key from the
+          <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Cloud Console</a>.
+          Stored locally in your browser and sent directly to the backend per request.
+        </p>
+      </div>
+
+      <div class="input-group">
+        <label for="backend-url-input">Backend Service Endpoint</label>
+        <input type="url" id="backend-url-input" placeholder="http://localhost:8000" autocomplete="off" spellcheck="false">
+        <p class="help-text">Default is <code>http://localhost:8000</code>. Point to your containerized deployment or remote domain.</p>
+      </div>
+
+      <div id="connection-status" class="status-badge hidden"></div>
+
+      <div class="btn-row">
+        <button id="test-connection-btn" class="secondary-btn">Test Connection</button>
+        <button id="save-settings-btn" class="primary-btn">Save Settings</button>
+      </div>
+    </section>
+
     <!-- Missing Key Alert Banner -->
     <div id="missing-key-banner" class="alert-banner hidden">
       <div class="alert-content">
@@ -47,7 +91,7 @@
     <!-- Main Audit Control Panel -->
     <section class="control-panel">
       <div class="input-group">
-        <label for="target-url-input">Target Website URL</label>
+        <label for="target-url-input">Target Website URL <span class="label-hint">(from active tab)</span></label>
         <div class="input-with-action">
           <input
             type="url"
@@ -55,8 +99,9 @@
             placeholder="https://example.com"
             autocomplete="off"
             spellcheck="false"
+            readonly
           >
-          <button id="sync-tab-btn" class="action-btn-sm" title="Reload active tab URL">
+          <button id="sync-tab-btn" class="action-btn-sm" title="Refresh from active tab">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M23 4v6h-6"></path>
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
@@ -88,6 +133,7 @@
         <div id="progress-fill" class="progress-fill" style="width: 0%;"></div>
       </div>
       <p id="progress-message" class="progress-message">Waiting for available audit slot...</p>
+      <button id="stop-audit-btn" class="stop-btn">Stop Audit</button>
     </section>
 
     <!-- Error View -->
