@@ -36,6 +36,9 @@ DEFAULT_AGENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "agent")
 )
 AGENT_SOURCE_DIR = os.environ.get("AGENT_SOURCE_DIR", DEFAULT_AGENT_DIR)
+# Active subprocesses mapped by job_id for immediate on-the-spot termination
+ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
+TERMINATED_JOBS: set[str] = set()
 
 
 class JobStore:
@@ -129,6 +132,10 @@ def _run_subprocess_worker(
         errors="replace",
         bufsize=1,
     )
+    _job_id = env.get("WEBLENS_JOB_ID")
+    if _job_id:
+        ACTIVE_PROCESSES[_job_id] = proc
+
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
 
@@ -168,6 +175,9 @@ def _run_subprocess_worker(
     t_err.join(timeout=2.0)
 
     stderr_text = "".join(stderr_lines)
+    if _job_id:
+        ACTIVE_PROCESSES.pop(_job_id, None)
+
     return proc.returncode or 0, stdout_lines, stderr_text, timed_out
 
 
@@ -199,6 +209,10 @@ class AuditJobRunner:
         """
         logger.info(f"Job {job_id} waiting for concurrency slot (url: {target_url})")
         async with self.semaphore:
+            if job_id in TERMINATED_JOBS:
+                logger.info(f"Job {job_id} was terminated before acquiring execution slot.")
+                return
+
             await self._execute_audit(job_id, target_url, groq_api_key)
 
     async def _execute_audit(
@@ -247,6 +261,8 @@ class AuditJobRunner:
             child_env["GROQ_API_KEY"] = clean_key
             child_env["PYTHONUNBUFFERED"] = "1"
             child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env["WEBLENS_JOB_ID"] = job_id
+
 
             cmd_args = [sys.executable, "run_master_audit.py", target_url]
             if not clean_key or clean_key.lower() in ("offline", "placeholder", "none", "placeholder_or_offline_key", "test"):
@@ -280,7 +296,9 @@ class AuditJobRunner:
                 self.timeout_seconds,
                 on_line,
             )
-
+            if job_id in TERMINATED_JOBS:
+                logger.info(f"Job {job_id} was terminated by user; aborting post-processing.")
+                return
             if timed_out:
                 logger.error(f"Job {job_id} timed out after {self.timeout_seconds}s.")
                 await self.job_store.update_job(
@@ -383,3 +401,43 @@ class AuditJobRunner:
             await self.job_store.update_progress(
                 job_id, "finalizing", 95, "Synthesizing standardized report..."
             )
+    async def terminate_job(self, job_id: str) -> bool:
+        """
+        Immediately stops the auditing process for job_id on the spot.
+        Kills the child subprocess and any spawned Chromium browser tree forcefully.
+        """
+        TERMINATED_JOBS.add(job_id)
+        proc = ACTIVE_PROCESSES.pop(job_id, None)
+
+        if proc and proc.poll() is None:
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        capture_output=True,
+                        check=False,
+                    )
+                else:
+                    proc.kill()
+            except Exception as e:
+                logger.warning(f"Error terminating process for job {job_id}: {e}")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await self.job_store.update_job(
+            job_id,
+            status="failed",
+            finished_at=now_iso,
+            error="Audit terminated by user.",
+        )
+        await self.job_store.update_progress(
+            job_id,
+            stage="terminated",
+            percent=0,
+            message="Audit terminated by user.",
+        )
+        logger.info(f"Job {job_id} successfully terminated on the spot by user request.")
+        return True

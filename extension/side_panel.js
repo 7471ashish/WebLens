@@ -34,6 +34,7 @@ const progressTimer = document.getElementById("progress-timer");
 const progressFill = document.getElementById("progress-fill");
 const progressMessage = document.getElementById("progress-message");
 const stopAuditBtn = document.getElementById("stop-audit-btn");
+const terminateAuditBtn = document.getElementById("terminate-audit-btn");
 
 // Error Elements
 const errorSection = document.getElementById("error-section");
@@ -100,6 +101,9 @@ function setupEventListeners() {
   startAuditBtn.addEventListener("click", initiateAudit);
   retryAuditBtn.addEventListener("click", initiateAudit);
   stopAuditBtn.addEventListener("click", stopAudit);
+  if (terminateAuditBtn) {
+    terminateAuditBtn.addEventListener("click", stopAudit);
+  }
 
   // Keep the target URL synced to whatever the browser's address bar shows,
   // even while the side panel stays open across tab switches/navigations —
