@@ -214,6 +214,23 @@ async def get_audit(job_id: str):
             detail=f"Audit job '{job_id}' not found.",
         )
     return AuditStatusResponse(**job)
+@app.post(
+    "/audits/{job_id}/terminate",
+    summary="Terminate Active Audit Job on the spot",
+)
+@app.post(
+    "/audits/{job_id}/cancel",
+    summary="Cancel Active Audit Job on the spot",
+)
+async def terminate_audit(job_id: str):
+    job = await job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Audit job '{job_id}' not found.",
+        )
+    await job_runner.terminate_job(job_id)
+    return {"status": "terminated", "job_id": job_id, "message": "Audit job terminated successfully."}
 
 
 @app.get(
