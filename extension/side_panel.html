@@ -26,15 +26,18 @@
           <p class="brand-subtitle">AI Technical Health & Readiness</p>
         </div>
       </div>
-      <button id="open-settings-btn" class="icon-button" title="Settings">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path
-            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
-          </path>
-        </svg>
-      </button>
+      <div class="settings-trigger">
+        <span id="settings-hint" class="settings-hint">Configure API key for better result</span>
+        <button id="open-settings-btn" class="icon-button" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+            </path>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <!-- Inline Settings Panel (replaces the old separate options page) -->
@@ -66,14 +69,6 @@
           <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Cloud Console</a>.
           Stored locally in your browser and sent directly to the backend per request.
         </p>
-      </div>
-
-      <div class="input-group">
-        <label for="backend-url-input">Backend Service Endpoint</label>
-        <input type="url" id="backend-url-input" placeholder="http://localhost:8000" autocomplete="off"
-          spellcheck="false">
-        <p class="help-text">Default is <code>http://localhost:8000</code>. Point to your containerized deployment or
-          remote domain.</p>
       </div>
 
       <div id="connection-status" class="status-badge hidden"></div>
@@ -123,6 +118,9 @@
       </button>
     </section>
 
+    <!-- Audit Tabs: each open/completed audit gets its own tab, like browser tabs -->
+    <div id="audit-tabs" class="audit-tabs-bar hidden"></div>
+
     <!-- Progress View -->
     <section id="progress-section" class="progress-section hidden">
       <div class="progress-header">
@@ -137,13 +135,90 @@
         <div id="progress-fill" class="progress-fill" style="width: 0%;"></div>
       </div>
       <p id="progress-message" class="progress-message">Waiting for available audit slot...</p>
-      <button id="stop-audit-btn" class="stop-btn">Stop Audit</button>
       <button id="terminate-audit-btn" class="terminate-btn">Terminate Audit</button>
+    </section>
+
+    <!-- Skeleton Loader: shown while an audit is running, mirrors the shape of the eventual results -->
+    <section id="results-skeleton" class="results-section hidden" aria-hidden="true">
+      <div class="site-header-card">
+        <div class="skel-line skel-w-45" style="height: 15px;"></div>
+        <div class="meta-row">
+          <div class="skel-line skel-w-30" style="height: 10px; margin-top: 6px;"></div>
+        </div>
+      </div>
+
+      <div class="metric-strip">
+        <div class="metric-card skel-card"><div class="skel-block" style="width: 24px; height: 20px;"></div><div class="skel-block" style="width: 44px; height: 8px; margin-top: 6px;"></div></div>
+        <div class="metric-card skel-card"><div class="skel-block" style="width: 24px; height: 20px;"></div><div class="skel-block" style="width: 44px; height: 8px; margin-top: 6px;"></div></div>
+        <div class="metric-card skel-card"><div class="skel-block" style="width: 24px; height: 20px;"></div><div class="skel-block" style="width: 44px; height: 8px; margin-top: 6px;"></div></div>
+        <div class="metric-card skel-card"><div class="skel-block" style="width: 24px; height: 20px;"></div><div class="skel-block" style="width: 44px; height: 8px; margin-top: 6px;"></div></div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="pill-group">
+          <div class="skel-pill" style="width: 56px;"></div>
+          <div class="skel-pill" style="width: 48px;"></div>
+          <div class="skel-pill" style="width: 48px;"></div>
+          <div class="skel-pill" style="width: 58px;"></div>
+          <div class="skel-pill" style="width: 42px;"></div>
+        </div>
+        <div class="secondary-filters">
+          <div class="skel-block" style="flex: 1; height: 28px; border-radius: 6px;"></div>
+          <div class="skel-block" style="flex: 1.2; height: 28px; border-radius: 6px;"></div>
+        </div>
+      </div>
+
+      <div class="findings-list">
+        <div class="finding-card">
+          <div class="finding-header">
+            <div class="skel-block" style="width: 34px; height: 16px; border-radius: 4px; margin-top: 1px;"></div>
+            <div class="finding-title-wrap">
+              <div class="skel-line skel-w-85"></div>
+              <div class="skel-line skel-w-30" style="height: 9px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="finding-card">
+          <div class="finding-header">
+            <div class="skel-block" style="width: 34px; height: 16px; border-radius: 4px; margin-top: 1px;"></div>
+            <div class="finding-title-wrap">
+              <div class="skel-line skel-w-70"></div>
+              <div class="skel-line skel-w-30" style="height: 9px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="finding-card">
+          <div class="finding-header">
+            <div class="skel-block" style="width: 34px; height: 16px; border-radius: 4px; margin-top: 1px;"></div>
+            <div class="finding-title-wrap">
+              <div class="skel-line skel-w-90"></div>
+              <div class="skel-line skel-w-30" style="height: 9px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="finding-card">
+          <div class="finding-header">
+            <div class="skel-block" style="width: 34px; height: 16px; border-radius: 4px; margin-top: 1px;"></div>
+            <div class="finding-title-wrap">
+              <div class="skel-line skel-w-60"></div>
+              <div class="skel-line skel-w-30" style="height: 9px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="telemetry-footer">
+        <div class="telemetry-grid">
+          <div class="telemetry-item skel-card" style="align-items: flex-start;"><div class="skel-block" style="width: 60%; height: 8px;"></div><div class="skel-block" style="width: 40%; height: 10px; margin-top: 6px;"></div></div>
+          <div class="telemetry-item skel-card" style="align-items: flex-start;"><div class="skel-block" style="width: 60%; height: 8px;"></div><div class="skel-block" style="width: 40%; height: 10px; margin-top: 6px;"></div></div>
+          <div class="telemetry-item skel-card" style="align-items: flex-start;"><div class="skel-block" style="width: 60%; height: 8px;"></div><div class="skel-block" style="width: 40%; height: 10px; margin-top: 6px;"></div></div>
+        </div>
+      </footer>
     </section>
 
     <!-- Error View -->
     <section id="error-section" class="error-section hidden">
-      <div class="error-badge">Audit Failed</div>
+      <div class="error-badge" id="error-badge">Audit Failed</div>
       <p id="error-message" class="error-text"></p>
       <button id="retry-audit-btn" class="secondary-btn">Retry Audit</button>
     </section>

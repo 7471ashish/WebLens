@@ -1,7 +1,8 @@
 /**
  * WebLens Side Panel Controller
- * Handles active tab synchronization, audit scheduling, live progress updates,
- * finding card rendering, evidence-tier segregation, and filtering.
+ * Handles active tab synchronization, parallel audit scheduling (one browser-tab-like
+ * strip per audit job), live progress updates, finding card rendering, evidence-tier
+ * segregation, and filtering.
  */
 
 const DEFAULT_BACKEND_URL = "http://localhost:8000";
@@ -10,6 +11,7 @@ const DEFAULT_BACKEND_URL = "http://localhost:8000";
 const missingKeyBanner = document.getElementById("missing-key-banner");
 const bannerConfigBtn = document.getElementById("banner-config-btn");
 const openSettingsBtn = document.getElementById("open-settings-btn");
+const settingsHint = document.getElementById("settings-hint");
 const targetUrlInput = document.getElementById("target-url-input");
 const syncTabBtn = document.getElementById("sync-tab-btn");
 const startAuditBtn = document.getElementById("start-audit-btn");
@@ -21,10 +23,12 @@ const settingsPanel = document.getElementById("settings-panel");
 const closeSettingsBtn = document.getElementById("close-settings-btn");
 const groqKeyInput = document.getElementById("groq-key-input");
 const togglePwdBtn = document.getElementById("toggle-pwd-btn");
-const backendUrlInput = document.getElementById("backend-url-input");
 const testConnectionBtn = document.getElementById("test-connection-btn");
 const saveSettingsBtn = document.getElementById("save-settings-btn");
 const connectionStatus = document.getElementById("connection-status");
+
+// Audit Tabs Bar
+const tabsBar = document.getElementById("audit-tabs");
 
 // Progress Elements
 const progressSection = document.getElementById("progress-section");
@@ -33,11 +37,14 @@ const progressPercent = document.getElementById("progress-percent");
 const progressTimer = document.getElementById("progress-timer");
 const progressFill = document.getElementById("progress-fill");
 const progressMessage = document.getElementById("progress-message");
-const stopAuditBtn = document.getElementById("stop-audit-btn");
 const terminateAuditBtn = document.getElementById("terminate-audit-btn");
+
+// Skeleton
+const resultsSkeleton = document.getElementById("results-skeleton");
 
 // Error Elements
 const errorSection = document.getElementById("error-section");
+const errorBadge = document.getElementById("error-badge");
 const errorMessage = document.getElementById("error-message");
 const retryAuditBtn = document.getElementById("retry-audit-btn");
 
@@ -63,51 +70,65 @@ const severityPills = document.querySelectorAll(".pill[data-severity]");
 const tierFilter = document.getElementById("tier-filter");
 const searchInput = document.getElementById("search-input");
 
-// State
+// ---- State ----
+// Each open/completed audit is a "job" rendered as its own tab, so several
+// audits can run in parallel (one per website you visit and start).
+let jobs = [];               // { id, jobId, url, label, status, progress, result, error, startedAt }
+let activeTabId = null;      // which job's tab is currently displayed below the tab strip
+const eventSources = {};     // tabId -> EventSource, one per in-flight job
+
 let currentFindings = [];
 let activeSeverityFilter = "all";
 let activeTierFilter = "all";
 let activeSearchQuery = "";
-let auditStartTime = null;
-let timerInterval = null;
-let activeEventSource = null;
-let isAuditRunning = false;
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", async () => {
   setupEventListeners();
   await checkConfiguredKey();
-  await restorePreviousSession();
-  if (!isAuditRunning) {
-    await syncActiveTabUrl();
-  }
+  await restoreSession();
+  await syncActiveTabUrl();
+
+  // Single shared ticker: only updates the timer text for whichever tab is
+  // currently on screen, so background jobs don't need their own intervals.
+  setInterval(() => {
+    const job = getActiveJob();
+    if (job && (job.status === "queued" || job.status === "running") && job.startedAt) {
+      const elapsedSec = Math.floor((Date.now() - job.startedAt) / 1000);
+      progressTimer.textContent = `${elapsedSec}s`;
+    }
+  }, 1000);
 });
 
-// Listen for updates from background service worker
+// Defensive: if a background message ever reports a job update, route it to
+// the matching tab rather than assuming there's only one job.
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "JOB_UPDATED" && message.job) {
-    handleJobUpdate(message.job);
+    const job = jobs.find((j) => j.jobId === (message.job.job_id || message.job.id));
+    if (job) applyJobUpdate(job, message.job);
   }
 });
 
 function setupEventListeners() {
-  openSettingsBtn.addEventListener("click", openSettingsPanel);
-  bannerConfigBtn.addEventListener("click", openSettingsPanel);
+  // Gear icon toggles: first click opens, clicking it again (while open)
+  // closes -- same animation either way.
+  openSettingsBtn.addEventListener("click", toggleSettingsPanel);
+  settingsHint.addEventListener("click", toggleSettingsPanel);
+  bannerConfigBtn.addEventListener("click", () => {
+    if (!isSettingsPanelOpen()) openSettingsPanel();
+  });
   closeSettingsBtn.addEventListener("click", closeSettingsPanel);
   togglePwdBtn.addEventListener("click", togglePasswordVisibility);
   testConnectionBtn.addEventListener("click", testBackendConnection);
   saveSettingsBtn.addEventListener("click", saveSettings);
   syncTabBtn.addEventListener("click", syncActiveTabUrl);
   startAuditBtn.addEventListener("click", initiateAudit);
-  retryAuditBtn.addEventListener("click", initiateAudit);
-  stopAuditBtn.addEventListener("click", stopAudit);
-  if (terminateAuditBtn) {
-    terminateAuditBtn.addEventListener("click", stopAudit);
-  }
+  retryAuditBtn.addEventListener("click", retryAudit);
+  terminateAuditBtn.addEventListener("click", terminateAudit);
 
-  // Keep the target URL synced to whatever the browser's address bar shows,
-  // even while the side panel stays open across tab switches/navigations —
-  // but never while an audit is actively running (see syncActiveTabUrl).
+  // Keep the target URL synced to whatever the browser's address bar shows.
+  // This never needs to "lock" any more -- starting a new audit opens its own
+  // tab, so it can't collide with audits already running.
   chrome.tabs.onActivated.addListener(syncActiveTabUrl);
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.url && tab.active) {
@@ -137,28 +158,65 @@ function setupEventListeners() {
     applyFilters();
   });
 
-  // Cleanly close EventSource on side panel unload
+  // Cleanly close every open EventSource on side panel unload
   window.addEventListener("beforeunload", () => {
-    if (activeEventSource) {
-      activeEventSource.close();
-      activeEventSource = null;
-    }
+    Object.values(eventSources).forEach((es) => es.close());
   });
 }
 
+function isSettingsPanelOpen() {
+  return (
+    !settingsPanel.classList.contains("hidden") &&
+    !settingsPanel.classList.contains("panel-collapsed")
+  );
+}
+
+/** Gear icon (and hint text) behavior: open if closed, close if open. */
+async function toggleSettingsPanel() {
+  if (isSettingsPanelOpen()) {
+    closeSettingsPanel();
+  } else {
+    await openSettingsPanel();
+  }
+}
+
 async function openSettingsPanel() {
-  const { groq_api_key, backend_url } = await chrome.storage.local.get([
-    "groq_api_key",
-    "backend_url",
-  ]);
+  const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
   groqKeyInput.value = groq_api_key || "";
-  backendUrlInput.value = backend_url || DEFAULT_BACKEND_URL;
   connectionStatus.classList.add("hidden");
+
+  popIcon(openSettingsBtn);
+
+  // Reveal by growing outward from the gear icon's corner, mirroring the
+  // reference "Register" button's expand-to-fill animation, instead of
+  // just snapping the hidden class off.
   settingsPanel.classList.remove("hidden");
+  settingsPanel.classList.add("panel-collapsed");
+  // Force layout so the collapsed state is committed before we remove it --
+  // otherwise both class changes get batched and no transition plays.
+  void settingsPanel.offsetWidth;
+  settingsPanel.classList.remove("panel-collapsed");
 }
 
 function closeSettingsPanel() {
-  settingsPanel.classList.add("hidden");
+  popIcon(closeSettingsBtn);
+
+  // Mirror the open animation in reverse: shrink back down into the corner,
+  // then pull it out of layout once the transition finishes (timing matches
+  // the .settings-panel transform duration in the CSS).
+  settingsPanel.classList.add("panel-collapsed");
+  window.setTimeout(() => {
+    if (settingsPanel.classList.contains("panel-collapsed")) {
+      settingsPanel.classList.add("hidden");
+    }
+  }, 620);
+}
+
+/** Quick press-pop feedback on an icon button (gear / close-X). */
+function popIcon(el) {
+  el.classList.remove("icon-pop");
+  void el.offsetWidth; // restart the animation if it's still running
+  el.classList.add("icon-pop");
 }
 
 function togglePasswordVisibility() {
@@ -167,7 +225,7 @@ function togglePasswordVisibility() {
 }
 
 async function testBackendConnection() {
-  const targetUrl = (backendUrlInput.value.trim() || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+  const targetUrl = DEFAULT_BACKEND_URL;
   connectionStatus.className = "status-badge";
   connectionStatus.textContent = "Connecting to backend...";
   connectionStatus.classList.remove("hidden");
@@ -184,13 +242,16 @@ async function testBackendConnection() {
   }
 }
 
+/**
+ * Groq key is stored in chrome.storage.local and picked back up automatically
+ * on every future audit request -- see submitAuditJob(), which reads it fresh
+ * from storage each time rather than keeping it only in memory.
+ */
 async function saveSettings() {
   const key = groqKeyInput.value.trim();
-  const url = (backendUrlInput.value.trim() || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
 
   await chrome.storage.local.set({
     groq_api_key: key,
-    backend_url: url,
   });
 
   await checkConfiguredKey();
@@ -207,7 +268,6 @@ async function checkConfiguredKey() {
 }
 
 async function syncActiveTabUrl() {
-  if (isAuditRunning) return; // Never move the target URL while an audit is in flight.
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url && (tab.url.startsWith("http://") || tab.url.startsWith("https://"))) {
@@ -218,44 +278,55 @@ async function syncActiveTabUrl() {
   }
 }
 
-async function restorePreviousSession() {
-  const stored = await chrome.storage.local.get([
-    "active_job_id",
-    "active_job_status",
-    "active_job_progress",
-    "active_job_result",
-    "active_job_error",
-    "active_job_url",
-  ]);
+function getActiveJob() {
+  return jobs.find((j) => j.id === activeTabId) || null;
+}
 
-  if (stored.active_job_status === "running" || stored.active_job_status === "queued") {
-    // A job is genuinely still in flight — keep watching it, and keep the
-    // URL pinned to whatever it's auditing rather than the active tab.
-    if (stored.active_job_url) {
-      targetUrlInput.value = stored.active_job_url;
-    }
-    showRunningState();
-    if (stored.active_job_progress) {
-      updateProgressDisplay(stored.active_job_progress);
-    }
-    if (stored.active_job_id) {
-      const { backend_url } = await chrome.storage.local.get(["backend_url"]);
-      const activeBackend = (backend_url || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
-      connectSSE(stored.active_job_id, activeBackend);
-    }
-  } else if (stored.active_job_status === "done" || stored.active_job_status === "failed") {
-    // Don't surface results/errors from a previous audit — start fresh each
-    // time the panel opens. Clear the stale job state so it doesn't reappear.
-    await chrome.storage.local.set({
-      active_job_id: null,
-      active_job_status: null,
-      active_job_progress: null,
-      active_job_result: null,
-      active_job_error: null,
-    });
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
   }
 }
 
+async function persistState() {
+  await chrome.storage.local.set({
+    weblens_jobs: jobs,
+    weblens_active_tab_id: activeTabId,
+  });
+}
+
+/**
+ * Restore whatever tabs existed from a previous session. Jobs that were still
+ * queued/running get their SSE stream reconnected; finished/failed jobs stay
+ * exactly as they were so the user can still review or close them.
+ */
+async function restoreSession() {
+  const stored = await chrome.storage.local.get([
+    "weblens_jobs",
+    "weblens_active_tab_id",
+  ]);
+
+  jobs = Array.isArray(stored.weblens_jobs) ? stored.weblens_jobs : [];
+  activeTabId = stored.weblens_active_tab_id || (jobs.length ? jobs[jobs.length - 1].id : null);
+
+  const activeBackend = DEFAULT_BACKEND_URL;
+
+  jobs.forEach((job) => {
+    if ((job.status === "queued" || job.status === "running") && job.jobId) {
+      connectSSE(job, activeBackend);
+    }
+  });
+
+  renderTabs();
+  renderActiveTabContent();
+}
+
+/**
+ * Starts a brand-new audit in its own tab -- like opening a new browser tab --
+ * so it runs alongside anything already in progress instead of replacing it.
+ */
 async function initiateAudit() {
   const url = targetUrlInput.value.trim();
   if (!url) {
@@ -263,19 +334,55 @@ async function initiateAudit() {
     return;
   }
 
-  const { groq_api_key, backend_url } = await chrome.storage.local.get([
-    "groq_api_key",
-    "backend_url",
-  ]);
+  const tabId = "tab_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  const job = {
+    id: tabId,
+    jobId: null,
+    url,
+    label: hostnameOf(url),
+    status: "queued",
+    progress: null,
+    maxPercent: 0,
+    result: null,
+    error: null,
+    startedAt: Date.now(),
+  };
 
-  const activeBackend = (backend_url || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+  jobs.push(job);
+  activeTabId = tabId;
+  await persistState();
+  renderTabs();
+  renderActiveTabContent();
+
+  await submitAuditJob(job);
+}
+
+/** Re-runs a finished/failed tab's audit in place, same tab, fresh job id. */
+async function retryAudit() {
+  const job = getActiveJob();
+  if (!job) return;
+
+  job.status = "queued";
+  job.progress = null;
+  job.maxPercent = 0;
+  job.result = null;
+  job.error = null;
+  job.jobId = null;
+  job.startedAt = Date.now();
+  await persistState();
+  renderTabs();
+  renderActiveTabContent();
+
+  await submitAuditJob(job);
+}
+
+/** POSTs a job to the backend and, on success, opens its SSE stream. */
+async function submitAuditJob(job) {
+  const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
+  const activeBackend = DEFAULT_BACKEND_URL;
   const activeKey = groq_api_key ? groq_api_key.trim() : "placeholder_key";
 
-  // Hide previous errors/results, start loading
-  errorSection.classList.add("hidden");
-  resultsSection.classList.add("hidden");
-  showRunningState();
-
+  startAuditBtn.disabled = true;
   try {
     const response = await fetch(`${activeBackend}/audits`, {
       method: "POST",
@@ -284,7 +391,7 @@ async function initiateAudit() {
         "X-Install-ID": await getOrCreateInstallId(),
       },
       body: JSON.stringify({
-        url: url,
+        url: job.url,
         groq_api_key: activeKey,
       }),
     });
@@ -295,45 +402,42 @@ async function initiateAudit() {
     }
 
     const { job_id } = await response.json();
-
-    // Store in storage
-    await chrome.storage.local.set({
-      active_job_id: job_id,
-      active_job_status: "queued",
-      active_job_url: url,
-      active_job_result: null,
-      active_job_error: null,
-    });
-
-    // Establish Server-Sent Events (SSE) stream for major lifecycle milestones
-    connectSSE(job_id, activeBackend);
-
+    job.jobId = job_id;
+    await persistState();
+    connectSSE(job, activeBackend);
   } catch (err) {
-    showError(err.message || "Failed to contact WebLens backend.");
+    job.status = "failed";
+    job.error = err.message || "Failed to contact WebLens backend.";
+    await persistState();
+    renderTabs();
+    if (activeTabId === job.id) renderActiveTabContent();
+  } finally {
+    startAuditBtn.disabled = false;
   }
 }
 
 /**
- * Ask the backend to cancel the in-flight job, tear down the local SSE
- * stream, and reset the panel to idle. Assumes a POST
+ * Ask the backend to cancel the currently viewed tab's in-flight job, tear
+ * down its SSE stream, and mark it terminated. Assumes a POST
  * `${backendUrl}/audits/{job_id}/cancel` endpoint -- adjust the path here if
- * your backend exposes cancellation differently.
+ * your backend exposes cancellation differently. Only available while running
+ * -- once a job is done/failed/terminated it's closed via the tab's "x" instead.
  */
-async function stopAudit() {
-  const { active_job_id, backend_url } = await chrome.storage.local.get([
-    "active_job_id",
-    "backend_url",
-  ]);
-  const activeBackend = (backend_url || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+async function terminateAudit() {
+  const job = getActiveJob();
+  if (!job || (job.status !== "queued" && job.status !== "running")) return;
 
-  if (activeEventSource) {
-    activeEventSource.close();
-    activeEventSource = null;
+  const activeBackend = DEFAULT_BACKEND_URL;
+
+  const es = eventSources[job.id];
+  if (es) {
+    es.close();
+    delete eventSources[job.id];
   }
 
-  if (active_job_id) {
+  if (job.jobId) {
     try {
-      await fetch(`${activeBackend}/audits/${encodeURIComponent(active_job_id)}/cancel`, {
+      await fetch(`${activeBackend}/audits/${encodeURIComponent(job.jobId)}/cancel`, {
         method: "POST",
       });
     } catch (err) {
@@ -341,155 +445,113 @@ async function stopAudit() {
     }
   }
 
-  await chrome.storage.local.set({
-    active_job_id: null,
-    active_job_status: null,
-    active_job_progress: null,
-    active_job_result: null,
-    active_job_error: null,
-  });
-
-  stopTimer();
-  hideRunningState();
+  job.status = "terminated";
+  job.error = "Audit terminated by user.";
+  await persistState();
+  renderTabs();
+  renderActiveTabContent();
 }
 
-function handleJobUpdate(job) {
-  if (job.status === "queued" || job.status === "running") {
-    showRunningState();
-    if (job.progress) {
-      updateProgressDisplay(job.progress);
-    }
-  } else if (job.status === "done" && job.result) {
-    stopTimer();
-    hideRunningState();
-    renderAuditResult(job.result);
-  } else if (job.status === "failed") {
-    stopTimer();
-    hideRunningState();
-    showError(job.error || "Audit failed during execution.");
-  }
-}
+/** Only allowed once a tab is done/failed/terminated -- never mid-run. */
+async function closeTab(tabId) {
+  const job = jobs.find((j) => j.id === tabId);
+  if (!job || job.status === "queued" || job.status === "running") return;
 
-/**
- * Connect to backend via Server-Sent Events (SSE).
- * Only fires when major lifecycle events occur (stage changes, completion, or failure).
- */
-function connectSSE(jobId, backendUrl) {
-  if (activeEventSource) {
-    activeEventSource.close();
-    activeEventSource = null;
-  }
-
-  const streamUrl = `${backendUrl}/audits/${encodeURIComponent(jobId)}/stream`;
-  console.log(`[WebLens] Connecting to SSE stream: ${streamUrl}`);
-  const es = new EventSource(streamUrl);
-  activeEventSource = es;
-
-  es.onmessage = async (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      console.log("[WebLens] Major event received via SSE:", data.status, data.progress?.stage);
-
-      handleJobUpdate(data);
-
-      await chrome.storage.local.set({
-        active_job_status: data.status,
-        active_job_progress: data.progress,
-      });
-
-      if (data.status === "done") {
-        if (data.result) {
-          await chrome.storage.local.set({
-            active_job_result: data.result,
-          });
-        }
-        es.close();
-        if (activeEventSource === es) {
-          activeEventSource = null;
-        }
-
-        // Trigger native desktop notification
-        try {
-          chrome.runtime.sendMessage({
-            type: "NOTIFY_COMPLETION",
-            title: "WebLens Audit Complete",
-            message: `Completed audit for ${data.result?.site || "target site"}. Total findings: ${data.result?.summary?.total_findings || 0}.`,
-          });
-        } catch {
-          // Extension context may be closing
-        }
-      } else if (data.status === "failed") {
-        await chrome.storage.local.set({
-          active_job_error: data.error || "Audit failed during execution.",
-        });
-        es.close();
-        if (activeEventSource === es) {
-          activeEventSource = null;
-        }
-      }
-    } catch (parseErr) {
-      console.error("[WebLens] Failed to parse SSE event data:", parseErr, event.data);
-    }
-  };
-
-  es.onerror = async (err) => {
-    console.warn("[WebLens] SSE stream disconnected or closed:", err);
+  const es = eventSources[tabId];
+  if (es) {
     es.close();
-    if (activeEventSource === es) {
-      activeEventSource = null;
-    }
-
-    // Safety fallback: query backend once to see if job completed while stream closed
-    try {
-      const resp = await fetch(`${backendUrl}/audits/${encodeURIComponent(jobId)}`);
-      if (resp.ok) {
-        const currentJob = await resp.json();
-        handleJobUpdate(currentJob);
-        if (currentJob.status === "done" || currentJob.status === "failed") {
-          await chrome.storage.local.set({
-            active_job_status: currentJob.status,
-            active_job_result: currentJob.result,
-            active_job_error: currentJob.error,
-          });
-        }
-      }
-    } catch (fetchErr) {
-      console.debug("[WebLens] Status check on SSE disconnect:", fetchErr);
-    }
-  };
-}
-
-function showRunningState() {
-  isAuditRunning = true;
-  startAuditBtn.disabled = true;
-  syncTabBtn.disabled = true;
-  auditSpinner.classList.remove("hidden");
-  btnText.textContent = "Auditing...";
-  progressSection.classList.remove("hidden");
-
-  if (!timerInterval) {
-    auditStartTime = Date.now();
-    timerInterval = setInterval(() => {
-      const elapsedSec = Math.floor((Date.now() - auditStartTime) / 1000);
-      progressTimer.textContent = `${elapsedSec}s`;
-    }, 1000);
+    delete eventSources[tabId];
   }
+
+  jobs = jobs.filter((j) => j.id !== tabId);
+
+  if (activeTabId === tabId) {
+    activeTabId = jobs.length ? jobs[jobs.length - 1].id : null;
+  }
+
+  await persistState();
+  renderTabs();
+  renderActiveTabContent();
 }
 
-function hideRunningState() {
-  isAuditRunning = false;
-  startAuditBtn.disabled = false;
-  syncTabBtn.disabled = false;
-  auditSpinner.classList.add("hidden");
-  btnText.textContent = "Audit This Page";
+async function switchToTab(tabId) {
+  if (activeTabId === tabId) return;
+  activeTabId = tabId;
+  await persistState();
+  renderTabs();
+  renderActiveTabContent();
+}
+
+function statusDotClass(job) {
+  if (job.status === "queued" || job.status === "running") return "dot-running";
+  if (job.status === "done") return "dot-done";
+  return "dot-failed"; // failed or terminated
+}
+
+function renderTabs() {
+  tabsBar.innerHTML = "";
+
+  if (jobs.length === 0) {
+    tabsBar.classList.add("hidden");
+    return;
+  }
+  tabsBar.classList.remove("hidden");
+
+  jobs.forEach((job) => {
+    const tab = document.createElement("div");
+    tab.className = "audit-tab" + (job.id === activeTabId ? " active" : "");
+    tab.title = job.url;
+
+    const dot = document.createElement("span");
+    dot.className = `tab-status-dot ${statusDotClass(job)}`;
+    tab.appendChild(dot);
+
+    const label = document.createElement("span");
+    label.className = "tab-label";
+    label.textContent = job.label;
+    tab.appendChild(label);
+
+    // The close "x" only ever shows once a job is finished (done, failed, or
+    // terminated) -- never while it's still queued/running.
+    const finished = job.status === "done" || job.status === "failed" || job.status === "terminated";
+    if (finished) {
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "tab-close-btn";
+      closeBtn.title = "Close";
+      closeBtn.textContent = "\u00d7";
+      closeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTab(job.id);
+      });
+      tab.appendChild(closeBtn);
+    }
+
+    tab.addEventListener("click", () => switchToTab(job.id));
+    tabsBar.appendChild(tab);
+  });
+}
+
+/** Redraws progress/skeleton/error/results to match whichever tab is active. */
+function renderActiveTabContent() {
+  const job = getActiveJob();
+
   progressSection.classList.add("hidden");
-  stopTimer();
-}
+  resultsSkeleton.classList.add("hidden");
+  errorSection.classList.add("hidden");
+  resultsSection.classList.add("hidden");
 
-function stopTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-    timerInterval = null;
+  if (!job) return;
+
+  if (job.status === "queued" || job.status === "running") {
+    progressSection.classList.remove("hidden");
+    resultsSkeleton.classList.remove("hidden");
+    updateProgressDisplay(job.progress || { stage: "Queued", percent: 5, message: "Waiting for available audit slot..." });
+  } else if (job.status === "done" && job.result) {
+    renderAuditResult(job.result);
+  } else if (job.status === "failed" || job.status === "terminated") {
+    errorBadge.textContent = job.status === "terminated" ? "Audit Terminated" : "Audit Failed";
+    errorMessage.textContent = job.error || "Audit failed during execution.";
+    errorSection.classList.remove("hidden");
   }
 }
 
@@ -501,10 +563,90 @@ function updateProgressDisplay(progress) {
   progressMessage.textContent = progress.message || "Processing audit modules...";
 }
 
-function showError(msg) {
-  hideRunningState();
-  errorSection.classList.remove("hidden");
-  errorMessage.textContent = msg;
+/** Applies a status/progress/result update to one job, then repaints it if visible. */
+async function applyJobUpdate(job, data) {
+  job.status = data.status;
+  if (data.progress) {
+    // Clamp so a later stage reporting a lower percent (or a stray/late SSE
+    // event) can never make the loading bar visually move backward.
+    const incoming = Math.max(5, Math.min(100, data.progress.percent ?? 10));
+    job.maxPercent = Math.max(job.maxPercent || 0, incoming);
+    job.progress = { ...data.progress, percent: job.maxPercent };
+  }
+  if (data.status === "done") {
+    job.result = data.result;
+    job.maxPercent = 100;
+    if (job.progress) job.progress.percent = 100;
+  }
+  if (data.status === "failed") job.error = data.error || "Audit failed during execution.";
+
+  await persistState();
+  renderTabs();
+  if (activeTabId === job.id) {
+    renderActiveTabContent();
+  }
+
+  if (data.status === "done") {
+    try {
+      chrome.runtime.sendMessage({
+        type: "NOTIFY_COMPLETION",
+        title: "WebLens Audit Complete",
+        message: `Completed audit for ${data.result?.site || job.label}. Total findings: ${data.result?.summary?.total_findings || 0}.`,
+      });
+    } catch {
+      // Extension context may be closing
+    }
+  }
+}
+
+/**
+ * Connect to backend via Server-Sent Events (SSE) for one job.
+ * Only fires when major lifecycle events occur (stage changes, completion, or failure).
+ */
+function connectSSE(job, backendUrl) {
+  const existing = eventSources[job.id];
+  if (existing) {
+    existing.close();
+    delete eventSources[job.id];
+  }
+
+  const streamUrl = `${backendUrl}/audits/${encodeURIComponent(job.jobId)}/stream`;
+  console.log(`[WebLens] Connecting to SSE stream: ${streamUrl}`);
+  const es = new EventSource(streamUrl);
+  eventSources[job.id] = es;
+
+  es.onmessage = async (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      console.log("[WebLens] Major event received via SSE:", data.status, data.progress?.stage, job.label);
+
+      await applyJobUpdate(job, data);
+
+      if (data.status === "done" || data.status === "failed") {
+        es.close();
+        if (eventSources[job.id] === es) delete eventSources[job.id];
+      }
+    } catch (parseErr) {
+      console.error("[WebLens] Failed to parse SSE event data:", parseErr, event.data);
+    }
+  };
+
+  es.onerror = async () => {
+    console.warn(`[WebLens] SSE stream disconnected or closed for ${job.label}`);
+    es.close();
+    if (eventSources[job.id] === es) delete eventSources[job.id];
+
+    // Safety fallback: query backend once to see if job completed while stream closed
+    try {
+      const resp = await fetch(`${backendUrl}/audits/${encodeURIComponent(job.jobId)}`);
+      if (resp.ok) {
+        const currentJob = await resp.json();
+        await applyJobUpdate(job, currentJob);
+      }
+    } catch (fetchErr) {
+      console.debug("[WebLens] Status check on SSE disconnect:", fetchErr);
+    }
+  };
 }
 
 function renderAuditResult(result) {
@@ -538,6 +680,14 @@ function renderAuditResult(result) {
   telPages.textContent = `${pages} page${pages > 1 ? "s" : ""}`;
   const types = result.meta?.page_types_covered || ["homepage"];
   telTypes.textContent = types.join(", ");
+
+  // Reset filters back to defaults each time a different tab's results are shown
+  activeSeverityFilter = "all";
+  activeTierFilter = "all";
+  activeSearchQuery = "";
+  severityPills.forEach((p) => p.classList.toggle("active", p.dataset.severity === "all"));
+  tierFilter.value = "all";
+  searchInput.value = "";
 
   // Findings
   currentFindings = result.findings || [];
@@ -600,12 +750,7 @@ function renderFindingsList(findings) {
     const tierLabel = isTierMeasured ? "Measured" : "Heuristic";
     const tierClass = isTierMeasured ? "measured" : "heuristic";
 
-    let evidenceStr = "";
-    if (typeof finding.evidence === "string") {
-      evidenceStr = finding.evidence;
-    } else {
-      evidenceStr = JSON.stringify(finding.evidence, null, 2);
-    }
+    const evidenceHtml = renderEvidence(finding.evidence);
 
     const actionSummary = finding.suggested_action?.summary || "No specific action recorded.";
     const actionPriority = finding.suggested_action?.priority || sev;
@@ -625,7 +770,7 @@ function renderFindingsList(findings) {
         </svg>
       </div>
       <div class="finding-body">
-        <div class="finding-evidence">${escapeHtml(evidenceStr)}</div>
+        ${evidenceHtml}
         <div class="action-box">
           <div class="action-title">Suggested Action (${escapeHtml(actionPriority)})</div>
           <div class="action-text">${escapeHtml(actionSummary)}</div>
@@ -639,6 +784,118 @@ function renderFindingsList(findings) {
 
     findingsContainer.appendChild(card);
   });
+}
+
+/**
+ * Evidence usually arrives as a plain sentence, but a lot of it is a human
+ * sentence followed by a machine-generated
+ * "(source: ..., field: ..., value: {...}, details: ...)" tail. Dumping that
+ * whole thing as one monospace blob (old behavior) is hard to scan, so this
+ * pulls the tail apart into labeled rows and turns the value/details data
+ * into small stat chips instead.
+ */
+function renderEvidence(evidence) {
+  if (evidence === null || evidence === undefined || evidence === "") {
+    return `<p class="evidence-text">No evidence recorded.</p>`;
+  }
+
+  if (typeof evidence !== "string") {
+    return renderMetaRows(objectToPairs(evidence));
+  }
+
+  const match = evidence.match(
+    /^(.*?)\s*\(source:\s*([^,]+),\s*field:\s*([^,]+),\s*value:\s*(\{.*\})\s*,\s*details:\s*(.*)\)\s*$/s
+  );
+
+  if (!match) {
+    return `<p class="evidence-text">${escapeHtml(evidence)}</p>`;
+  }
+
+  const [, text, source, field, value, details] = match;
+  let html = "";
+  if (text.trim()) {
+    html += `<p class="evidence-text">${escapeHtml(text.trim())}</p>`;
+  }
+
+  html += `<div class="evidence-meta">`;
+  html += metaRow("Source", escapeHtml(source.trim()));
+  html += metaRow("Field", escapeHtml(field.trim()));
+
+  const parsedValue = tryParsePyDict(value.trim());
+  html += metaStackRow("Value", parsedValue ? chipGroup(objectToPairs(parsedValue)) : escapeHtml(value.trim()));
+
+  const detailPairs = splitTopLevel(details.trim(), ",").map((part) => {
+    const idx = part.indexOf(":");
+    return idx === -1 ? [null, part] : [part.slice(0, idx).trim(), part.slice(idx + 1).trim()];
+  });
+  html += metaStackRow("Details", chipGroup(detailPairs));
+  html += `</div>`;
+
+  return html;
+}
+
+function metaRow(label, valueHtml) {
+  return `<div class="evidence-meta-row"><span class="meta-key">${label}</span><span class="meta-val mono">${valueHtml}</span></div>`;
+}
+
+function metaStackRow(label, innerHtml) {
+  return `<div class="evidence-meta-row evidence-meta-stack"><span class="meta-key">${label}</span>${innerHtml}</div>`;
+}
+
+function chipGroup(pairs) {
+  const chips = pairs
+    .map(([k, v]) => {
+      const keyHtml = k ? `<span class="stat-chip-key">${escapeHtml(k)}</span>` : "";
+      return `<span class="stat-chip">${keyHtml}<span class="stat-chip-val">${escapeHtml(String(v))}</span></span>`;
+    })
+    .join("");
+  return `<div class="stat-chip-group">${chips}</div>`;
+}
+
+function renderMetaRows(pairs) {
+  if (!pairs.length) return `<p class="evidence-text">No evidence recorded.</p>`;
+  return `<div class="evidence-meta">${pairs
+    .map(([k, v]) => metaRow(escapeHtml(k), `${escapeHtml(String(v))}`))
+    .join("")}</div>`;
+}
+
+function objectToPairs(obj) {
+  if (!obj || typeof obj !== "object") return [];
+  return Object.entries(obj);
+}
+
+/** Parses a Python-style dict literal (single quotes, True/False/None) as JSON. */
+function tryParsePyDict(str) {
+  try {
+    const jsonish = str
+      .replace(/'/g, '"')
+      .replace(/\bTrue\b/g, "true")
+      .replace(/\bFalse\b/g, "false")
+      .replace(/\bNone\b/g, "null");
+    const parsed = JSON.parse(jsonish);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Splits on a separator at brace/bracket depth 0, so nested {..}/[..] survive intact. */
+function splitTopLevel(str, sep) {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of str) {
+    if (ch === "{" || ch === "[") depth++;
+    if (ch === "}" || ch === "]") depth--;
+    if (ch === sep && depth === 0) {
+      parts.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
 }
 
 function escapeHtml(str) {

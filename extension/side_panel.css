@@ -179,6 +179,50 @@ body {
   flex-direction: column;
   gap: 14px;
   box-shadow: var(--shadow-md);
+  /* Grows out of / shrinks back into the icon that opened it (matches the
+     "Register" button's expand-to-fill reveal). */
+  transform-origin: top right;
+  transform: scale(1);
+  opacity: 1;
+  transition: transform 0.62s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease;
+}
+
+.settings-panel.panel-collapsed {
+  transform: scale(0.06);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Brief press-pop on the gear/close icons, echoing the reference button's
+   click feedback. */
+@keyframes icon-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.8); }
+  100% { transform: scale(1); }
+}
+
+.icon-button.icon-pop {
+  animation: icon-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Settings trigger: gear icon + the API-key hint to its left */
+.settings-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.settings-hint:hover {
+  color: var(--accent-color);
 }
 
 .settings-panel-header {
@@ -782,17 +826,85 @@ body {
   display: flex;
 }
 
-.finding-evidence {
+.evidence-text {
   color: #3b3936;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+  line-height: 1.55;
+  font-size: 12px;
+}
+
+.evidence-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   background: #ffffff;
-  padding: 9px 11px;
+  padding: 10px 11px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
+}
+
+.evidence-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.evidence-meta-row.evidence-meta-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.meta-key {
+  flex-shrink: 0;
+  min-width: 46px;
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.meta-val {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.meta-val.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
+}
+
+.stat-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.stat-chip-key {
+  color: var(--text-muted);
+}
+
+.stat-chip-key::after {
+  content: ":";
+  margin-right: 3px;
+}
+
+.stat-chip-val {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .action-box {
@@ -857,8 +969,7 @@ body {
   display: none !important;
 }
 
-/* Terminate / Stop Button Styling */
-.stop-btn,
+/* Terminate Button Styling */
 .terminate-btn {
   align-self: flex-start;
   margin-top: 4px;
@@ -877,14 +988,153 @@ body {
   box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
 }
 
-.stop-btn:hover,
 .terminate-btn:hover {
   background: var(--sev-critical, #ef4444);
   color: #ffffff;
   border-color: var(--sev-critical, #ef4444);
 }
 
-.stop-btn:active,
 .terminate-btn:active {
   transform: translateY(1px);
+}
+
+/* Audit Tabs Bar (parallel audits, like browser tabs) */
+.audit-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.audit-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px 8px 0 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 150px;
+  transition: all 0.15s ease;
+  border-bottom: 2px solid transparent;
+}
+
+.audit-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.audit-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-bottom: 2px solid var(--accent-color);
+}
+
+.tab-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tab-status-dot.dot-running {
+  background: var(--accent-color);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+.tab-status-dot.dot-done {
+  background: var(--success, #10b981);
+}
+
+.tab-status-dot.dot-failed {
+  background: var(--sev-critical);
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tab-close-btn:hover {
+  background: var(--sev-critical-bg);
+  color: var(--sev-critical);
+}
+
+/* Skeleton Loader (YouTube-style shimmer placeholders) */
+@keyframes skel-shimmer {
+  0% { background-position: -300px 0; }
+  100% { background-position: 300px 0; }
+}
+
+.skel-line,
+.skel-block,
+.skel-pill,
+.skel-card > .skel-block {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    rgba(148, 163, 184, 0.28) 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 300px 100%;
+  animation: skel-shimmer 1.3s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.skel-line {
+  height: 12px;
+  width: 100%;
+}
+
+.skel-line.skel-w-30 { width: 30%; }
+.skel-line.skel-w-45 { width: 45%; }
+.skel-line.skel-w-60 { width: 60%; }
+.skel-line.skel-w-70 { width: 70%; }
+.skel-line.skel-w-85 { width: 85%; }
+.skel-line.skel-w-90 { width: 90%; }
+
+.skel-pill {
+  height: 22px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+
+.skel-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+#results-skeleton .finding-card {
+  cursor: default;
+}
+
+#results-skeleton .finding-card:hover {
+  border-color: var(--border-color);
 }
