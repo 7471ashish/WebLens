@@ -15,7 +15,8 @@ BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from job_runner import AuditJobRunner, JobStore
+from job_runner import AuditJobRunner, JobStore, run_preflight_scan
+from unittest.mock import AsyncMock, patch, MagicMock
 
 
 @pytest.mark.asyncio
@@ -98,3 +99,68 @@ with open(output_file, "w", encoding="utf-8") as f:
 
     # Verify key never exists in job record
     assert fake_key not in str(job)
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_scan_success():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.http_version = "HTTP/2"
+    mock_resp.headers = {
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "content-security-policy": "default-src 'self'",
+        "x-frame-options": "DENY",
+        "x-content-type-options": "nosniff",
+        "cache-control": "public, max-age=3600",
+        "etag": '"12345"',
+        "server": "nginx/1.24.0",
+    }
+
+    with patch("httpx.AsyncClient.head", new_callable=AsyncMock) as mock_head:
+        mock_head.return_value = mock_resp
+        result = await run_preflight_scan("https://secure.example.com")
+
+        assert result["scanned"] is True
+        assert result["status_code"] == 200
+        assert result["http_version"] == "HTTP/2"
+        assert result["hsts"] is True
+        assert result["csp"] is True
+        assert result["x_frame_options"] == "DENY"
+        assert result["x_content_type_options"] == "nosniff"
+        assert result["etag"] is True
+        assert result["server"] == "nginx/1.24.0"
+        assert result["security_score"] == 100
+        assert len(result["highlights"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_scan_missing_headers():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.http_version = "1.1"
+    mock_resp.headers = {}
+
+    with patch("httpx.AsyncClient.head", new_callable=AsyncMock) as mock_head:
+        mock_head.return_value = mock_resp
+        result = await run_preflight_scan("https://insecure.example.com")
+
+        assert result["scanned"] is True
+        assert result["hsts"] is False
+        assert result["csp"] is False
+        assert result["x_frame_options"] is None
+        assert result["security_score"] == 0
+        assert len(result["highlights"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_scan_network_error():
+    with patch("httpx.AsyncClient.head", new_callable=AsyncMock) as mock_head:
+        mock_head.side_effect = Exception("DNS Resolution Failure")
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = Exception("DNS Resolution Failure")
+            result = await run_preflight_scan("https://invalid-nonexistent-domain.xyz")
+
+            assert result["scanned"] is False
+            assert "error" in result
+            assert "DNS Resolution Failure" in result["error"]
+
