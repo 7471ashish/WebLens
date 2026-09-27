@@ -1,10 +1,11 @@
 /**
- * WebLens Side Panel Controller
+ * WebLens Side Panel Controller (Cross-Browser Chrome & Firefox)
  * Handles active tab synchronization, parallel audit scheduling (one browser-tab-like
  * strip per audit job), live progress updates, finding card rendering, evidence-tier
  * segregation, and filtering.
  */
 
+const browserApi = typeof browser !== "undefined" ? browser : chrome;
 const DEFAULT_BACKEND_URL = "http://localhost:8000";
 
 // DOM Elements
@@ -126,7 +127,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // Defensive: if a background message ever reports a job update, route it to
 // the matching tab rather than assuming there's only one job.
-chrome.runtime.onMessage.addListener((message) => {
+browserApi.runtime.onMessage.addListener((message) => {
   if (message.type === "JOB_UPDATED" && message.job) {
     const job = jobs.find((j) => j.jobId === (message.job.job_id || message.job.id));
     if (job) applyJobUpdate(job, message.job);
@@ -170,8 +171,8 @@ function setupEventListeners() {
   // Keep the target URL synced to whatever the browser's address bar shows.
   // This never needs to "lock" any more -- starting a new audit opens its own
   // tab, so it can't collide with audits already running.
-  chrome.tabs.onActivated.addListener(syncActiveTabUrl);
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  browserApi.tabs.onActivated.addListener(syncActiveTabUrl);
+  browserApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.url && tab.active) {
       syncActiveTabUrl();
     }
@@ -222,7 +223,7 @@ async function toggleSettingsPanel() {
 }
 
 async function openSettingsPanel() {
-  const { groq_api_key, backend_url } = await chrome.storage.local.get(["groq_api_key", "backend_url"]);
+  const { groq_api_key } = await browserApi.storage.local.get(["groq_api_key"]);
   groqKeyInput.value = groq_api_key || "";
   if (backendUrlInput) {
     backendUrlInput.value = backend_url || DEFAULT_BACKEND_URL;
@@ -289,15 +290,16 @@ async function testBackendConnection() {
 }
 
 /**
- * Groq key and Backend URL are stored in chrome.storage.local and picked back up automatically
- * on every future audit request -- see submitAuditJob().
+ * Groq key is stored in browserApi.storage.local and picked back up automatically
+ * on every future audit request -- see submitAuditJob(), which reads it fresh
+ * from storage each time rather than keeping it only in memory.
  */
 async function saveSettings() {
   const key = groqKeyInput.value.trim();
   const rawBackend = backendUrlInput ? backendUrlInput.value.trim() : "";
   const normalizedBackend = rawBackend ? rawBackend.replace(/\/+$/, "") : DEFAULT_BACKEND_URL;
 
-  await chrome.storage.local.set({
+  await browserApi.storage.local.set({
     groq_api_key: key,
     backend_url: normalizedBackend,
   });
@@ -308,7 +310,7 @@ async function saveSettings() {
 
 
 async function checkConfiguredKey() {
-  const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
+  const { groq_api_key } = await browserApi.storage.local.get(["groq_api_key"]);
   if (!groq_api_key || !groq_api_key.trim()) {
     missingKeyBanner.classList.remove("hidden");
   } else {
@@ -318,7 +320,7 @@ async function checkConfiguredKey() {
 
 async function syncActiveTabUrl() {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url && (tab.url.startsWith("http://") || tab.url.startsWith("https://"))) {
       targetUrlInput.value = tab.url;
     }
@@ -340,7 +342,7 @@ function hostnameOf(url) {
 }
 
 async function persistState() {
-  await chrome.storage.local.set({
+  await browserApi.storage.local.set({
     weblens_jobs: jobs,
     weblens_active_tab_id: activeTabId,
   });
@@ -352,7 +354,7 @@ async function persistState() {
  * exactly as they were so the user can still review or close them.
  */
 async function restoreSession() {
-  const stored = await chrome.storage.local.get([
+  const stored = await browserApi.storage.local.get([
     "weblens_jobs",
     "weblens_active_tab_id",
   ]);
@@ -429,8 +431,8 @@ async function retryAudit() {
 
 /** POSTs a job to the backend and, on success, opens its SSE stream. */
 async function submitAuditJob(job) {
-  const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
-  const activeBackend = await getActiveBackendUrl();
+  const { groq_api_key } = await browserApi.storage.local.get(["groq_api_key"]);
+  const activeBackend = DEFAULT_BACKEND_URL;
   const activeKey = groq_api_key ? groq_api_key.trim() : "placeholder_key";
 
   startAuditBtn.disabled = true;
@@ -653,7 +655,7 @@ async function applyJobUpdate(job, data) {
 
   if (data.status === "done") {
     try {
-      chrome.runtime.sendMessage({
+      browserApi.runtime.sendMessage({
         type: "NOTIFY_COMPLETION",
         title: "WebLens Audit Complete",
         message: `Completed audit for ${data.result?.site || job.label}. Total findings: ${data.result?.summary?.total_findings || 0}.`,
@@ -1286,10 +1288,10 @@ function renderEvidence(evidence) {
 }
 
 async function getOrCreateInstallId() {
-  let { install_id } = await chrome.storage.local.get(["install_id"]);
+  let { install_id } = await browserApi.storage.local.get(["install_id"]);
   if (!install_id) {
     install_id = "inst_" + Math.random().toString(36).substring(2, 12);
-    await chrome.storage.local.set({ install_id });
+    await browserApi.storage.local.set({ install_id });
   }
   return install_id;
 }
@@ -1626,7 +1628,7 @@ function inPageHighlightFunction(finding) {
     try {
       const candidate = document.querySelector(selectorMatch[1]);
       if (candidate) targetEl = candidate;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   // Strategy 2: Image / Alt attribute issues
