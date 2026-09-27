@@ -755,6 +755,38 @@ function renderFindingsList(findings) {
     const actionSummary = finding.suggested_action?.summary || "No specific action recorded.";
     const actionPriority = finding.suggested_action?.priority || sev;
 
+    // Build scope/coverage context strip
+    const scopeVal = finding.scope || null;
+    const affectedPages = finding.affected_pages;
+    const pagesExamined = finding.pages_examined;
+    const affectedRatio = finding.affected_ratio;
+    const affectedUrls = Array.isArray(finding.affected_urls) ? finding.affected_urls : [];
+
+    let coverageChips = "";
+    if (scopeVal) {
+      const scopeClass = scopeVal === "site-wide" ? "scope-sitewide" : scopeVal === "majority" ? "scope-majority" : "scope-single";
+      coverageChips += `<span class="coverage-chip ${scopeClass}">${escapeHtml(scopeVal)}</span>`;
+    }
+    if (affectedPages !== undefined && pagesExamined !== undefined) {
+      coverageChips += `<span class="coverage-chip scope-pages">${affectedPages}/${pagesExamined} pages</span>`;
+    }
+    if (affectedRatio !== undefined) {
+      coverageChips += `<span class="coverage-chip scope-ratio">${Math.round(affectedRatio * 100)}% affected</span>`;
+    }
+
+    const coverageStrip = coverageChips
+      ? `<div class="finding-coverage">${coverageChips}</div>`
+      : "";
+
+    const urlListHtml = affectedUrls.length
+      ? `<div class="affected-urls">
+           <span class="affected-urls-label">Affected URLs</span>
+           <ul class="affected-url-list">
+             ${affectedUrls.map(u => `<li><a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a></li>`).join("")}
+           </ul>
+         </div>`
+      : "";
+
     card.innerHTML = `
       <div class="finding-header">
         <span class="finding-badge ${sev}">${sev}</span>
@@ -770,7 +802,9 @@ function renderFindingsList(findings) {
         </svg>
       </div>
       <div class="finding-body">
+        ${coverageStrip}
         ${evidenceHtml}
+        ${urlListHtml}
         <div class="action-box">
           <div class="action-title">Suggested Action (${escapeHtml(actionPriority)})</div>
           <div class="action-text">${escapeHtml(actionSummary)}</div>
@@ -787,12 +821,13 @@ function renderFindingsList(findings) {
 }
 
 /**
- * Evidence usually arrives as a plain sentence, but a lot of it is a human
- * sentence followed by a machine-generated
- * "(source: ..., field: ..., value: {...}, details: ...)" tail. Dumping that
- * whole thing as one monospace blob (old behavior) is hard to scan, so this
- * pulls the tail apart into labeled rows and turns the value/details data
- * into small stat chips instead.
+ * Parses the actual evidence string format produced by the backend:
+ *
+ *   "Audited N representative pages; K/N pages exhibit this issue (/a, /b, ...).
+ *    Sample telemetry: URL 'https://...' (page_type): <Python dict or list>"
+ *
+ * Also handles the legacy "(source:..., field:..., value:..., details:...)"
+ * tail format and falls back to plain text for anything else.
  */
 function renderEvidence(evidence) {
   if (evidence === null || evidence === undefined || evidence === "") {
@@ -803,35 +838,99 @@ function renderEvidence(evidence) {
     return renderMetaRows(objectToPairs(evidence));
   }
 
-  const match = evidence.match(
+  // ── Legacy format: (source: ..., field: ..., value: {...}, details: ...) ──
+  const legacyMatch = evidence.match(
     /^(.*?)\s*\(source:\s*([^,]+),\s*field:\s*([^,]+),\s*value:\s*(\{.*\})\s*,\s*details:\s*(.*)\)\s*$/s
   );
-
-  if (!match) {
-    return `<p class="evidence-text">${escapeHtml(evidence)}</p>`;
+  if (legacyMatch) {
+    const [, text, source, field, value, details] = legacyMatch;
+    let html = "";
+    if (text.trim()) html += `<p class="evidence-text">${escapeHtml(text.trim())}</p>`;
+    html += `<div class="evidence-meta">`;
+    html += metaRow("Source", escapeHtml(source.trim()));
+    html += metaRow("Field", escapeHtml(field.trim()));
+    const parsedValue = tryParsePyDict(value.trim());
+    html += metaStackRow("Value", parsedValue ? chipGroup(objectToPairs(parsedValue)) : escapeHtml(value.trim()));
+    const detailPairs = splitTopLevel(details.trim(), ",").map((part) => {
+      const idx = part.indexOf(":");
+      return idx === -1 ? [null, part] : [part.slice(0, idx).trim(), part.slice(idx + 1).trim()];
+    });
+    html += metaStackRow("Details", chipGroup(detailPairs));
+    html += `</div>`;
+    return html;
   }
 
-  const [, text, source, field, value, details] = match;
+  // ── Current backend format ──
+  // Split on "Sample telemetry:" to separate prose from data
+  const telemetryIdx = evidence.indexOf("Sample telemetry:");
+  const prosePart = telemetryIdx === -1 ? evidence.trim() : evidence.slice(0, telemetryIdx).trim();
+  const telemetryPart = telemetryIdx === -1 ? null : evidence.slice(telemetryIdx + "Sample telemetry:".length).trim();
+
   let html = "";
-  if (text.trim()) {
-    html += `<p class="evidence-text">${escapeHtml(text.trim())}</p>`;
+  if (prosePart) {
+    html += `<p class="evidence-text">${escapeHtml(prosePart)}</p>`;
   }
 
-  html += `<div class="evidence-meta">`;
-  html += metaRow("Source", escapeHtml(source.trim()));
-  html += metaRow("Field", escapeHtml(field.trim()));
+  if (telemetryPart) {
+    // Parse: URL 'https://...' (page_type): <data>
+    // There can be multiple such entries separated by newlines
+    const entries = telemetryPart.split(/\n(?=URL\s+')/);
+    const blocks = entries.map((entry) => {
+      const urlMatch = entry.match(/^URL\s+'([^']+)'\s+\(([^)]+)\)\s*:\s*([\s\S]*)$/);
+      if (!urlMatch) return `<p class="evidence-text">${escapeHtml(entry.trim())}</p>`;
+      const [, url, pageType, rawData] = urlMatch;
+      const data = rawData.trim();
+      const parsed = tryParsePyList(data) || tryParsePyDict(data);
+      let dataHtml;
+      if (parsed && typeof parsed === "object") {
+        if (Array.isArray(parsed)) {
+          if (parsed.length === 0) {
+            dataHtml = `<span class="evidence-empty-list">[ ]</span>`;
+          } else {
+            dataHtml = parsed.map((item) => {
+              if (item && typeof item === "object") {
+                const pairs = Object.entries(item).filter(([, v]) => v !== null && v !== undefined && v !== "");
+                return pairs.length ? chipGroup(pairs) : `<span class="evidence-empty-list">{ }</span>`;
+              }
+              return `<span class="stat-chip"><span class="stat-chip-val">${escapeHtml(String(item))}</span></span>`;
+            }).join("");
+          }
+        } else {
+          const pairs = Object.entries(parsed).filter(([, v]) => v !== null && v !== undefined);
+          dataHtml = pairs.length ? chipGroup(pairs) : `<span class="evidence-empty-list">{ }</span>`;
+        }
+      } else {
+        dataHtml = `<code class="evidence-raw">${escapeHtml(data)}</code>`;
+      }
+      return `
+        <div class="telemetry-block">
+          <div class="telemetry-block-url">
+            <span class="tel-page-type">${escapeHtml(pageType)}</span>
+            <a class="tel-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>
+          </div>
+          <div class="telemetry-block-data stat-chip-group">${dataHtml}</div>
+        </div>`;
+    });
+    html += `<div class="telemetry-section"><span class="telemetry-label">Sample telemetry</span>${blocks.join("")}</div>`;
+  }
 
-  const parsedValue = tryParsePyDict(value.trim());
-  html += metaStackRow("Value", parsedValue ? chipGroup(objectToPairs(parsedValue)) : escapeHtml(value.trim()));
+  return html || `<p class="evidence-text">No evidence recorded.</p>`;
+}
 
-  const detailPairs = splitTopLevel(details.trim(), ",").map((part) => {
-    const idx = part.indexOf(":");
-    return idx === -1 ? [null, part] : [part.slice(0, idx).trim(), part.slice(idx + 1).trim()];
-  });
-  html += metaStackRow("Details", chipGroup(detailPairs));
-  html += `</div>`;
-
-  return html;
+/** Parses a Python-style list literal (single quotes, True/False/None). */
+function tryParsePyList(str) {
+  if (!str.startsWith("[")) return null;
+  try {
+    const jsonish = str
+      .replace(/'/g, '"')
+      .replace(/\bTrue\b/g, "true")
+      .replace(/\bFalse\b/g, "false")
+      .replace(/\bNone\b/g, "null");
+    const parsed = JSON.parse(jsonish);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function metaRow(label, valueHtml) {
