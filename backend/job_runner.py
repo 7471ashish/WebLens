@@ -27,10 +27,11 @@ logger = logging.getLogger("weblens.job_runner")
 
 # Maximum concurrent audit jobs
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
-# Audit execution hard timeout in seconds (agent has 240s ceiling)
-JOB_TIMEOUT_SECONDS = float(os.environ.get("JOB_TIMEOUT_SECONDS", "260.0"))
+# Audit execution hard timeout in seconds (0 or <= 0 disables timeout for unlimited execution)
+JOB_TIMEOUT_SECONDS = float(os.environ.get("JOB_TIMEOUT_SECONDS", "0"))
 # In-memory job record retention in seconds (1 hour default)
 JOB_TTL_SECONDS = float(os.environ.get("JOB_TTL_SECONDS", "3600.0"))
+
 
 # Locate source agent directory (default to ../agent relative to this file)
 DEFAULT_AGENT_DIR = os.path.abspath(
@@ -235,8 +236,9 @@ def _run_subprocess_worker(
     t_err.start()
 
     timed_out = False
+    effective_timeout = timeout_seconds if (timeout_seconds is not None and timeout_seconds > 0) else None
     try:
-        proc.wait(timeout=timeout_seconds)
+        proc.wait(timeout=effective_timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         try:

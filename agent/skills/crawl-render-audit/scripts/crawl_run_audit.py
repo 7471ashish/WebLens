@@ -156,8 +156,10 @@ async def run_complete_site_audit(
     opts = options or {}
     start_time = time.perf_counter()
     max_pages = int(opts.get("max_pages", DEFAULT_MAX_PAGES))
-    timeout_sec = float(opts.get("timeout_seconds", 240))
-    deadline = start_time + timeout_sec
+    raw_timeout = opts.get("global_timeout_seconds", opts.get("timeout_seconds", 0))
+    timeout_sec = float(raw_timeout) if raw_timeout is not None and raw_timeout != float("inf") else 0.0
+    deadline = (start_time + timeout_sec) if timeout_sec > 0 else None
+
 
     logger.info("==================================================")
     logger.info("Starting Bounded Multi-Page Audit for: %s (max_pages=%d)", target_url, max_pages)
@@ -284,7 +286,7 @@ async def run_complete_site_audit(
     # Audit each selected page sequentially (with remaining budget enforcement)
     for idx, page_candidate in enumerate(selected_pages, 1):
         now = time.perf_counter()
-        if now >= deadline - 3.0:
+        if deadline is not None and now >= deadline - 3.0:
             logger.warning("Approaching global deadline. Stopping multi-page audit at page %d/%d", idx, len(selected_pages))
             break
 

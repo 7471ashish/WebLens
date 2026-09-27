@@ -32,7 +32,7 @@ const connectionStatus = document.getElementById("connection-status");
 
 async function getActiveBackendUrl() {
   try {
-    const { backend_url } = await chrome.storage.local.get(["backend_url"]);
+    const { backend_url } = await browserApi.storage.local.get(["backend_url"]);
     if (backend_url && backend_url.trim()) {
       return backend_url.trim().replace(/\/+$/, "");
     }
@@ -223,7 +223,7 @@ async function toggleSettingsPanel() {
 }
 
 async function openSettingsPanel() {
-  const { groq_api_key } = await browserApi.storage.local.get(["groq_api_key"]);
+  const { groq_api_key, backend_url } = await browserApi.storage.local.get(["groq_api_key", "backend_url"]);
   groqKeyInput.value = groq_api_key || "";
   if (backendUrlInput) {
     backendUrlInput.value = backend_url || DEFAULT_BACKEND_URL;
@@ -432,7 +432,7 @@ async function retryAudit() {
 /** POSTs a job to the backend and, on success, opens its SSE stream. */
 async function submitAuditJob(job) {
   const { groq_api_key } = await browserApi.storage.local.get(["groq_api_key"]);
-  const activeBackend = DEFAULT_BACKEND_URL;
+  const activeBackend = await getActiveBackendUrl();
   const activeKey = groq_api_key ? groq_api_key.trim() : "placeholder_key";
 
   startAuditBtn.disabled = true;

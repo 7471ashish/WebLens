@@ -111,11 +111,15 @@ async def main():
             target_url = arg
 
     start_time = time.perf_counter()
-    GLOBAL_TIMEOUT_SECONDS = 240.0
-    master_deadline = start_time + GLOBAL_TIMEOUT_SECONDS
+    # Execution timeout in seconds (0 or <= 0 disables timeout ceiling)
+    GLOBAL_TIMEOUT_SECONDS = float(os.environ.get("GLOBAL_TIMEOUT_SECONDS", "0"))
+    master_deadline = (start_time + GLOBAL_TIMEOUT_SECONDS) if GLOBAL_TIMEOUT_SECONDS > 0 else None
 
     def remaining_seconds() -> float:
+        if master_deadline is None:
+            return float("inf")
         return max(0.0, master_deadline - time.perf_counter())
+
 
     # Resolve LLM enable mode (Default: LLM optional enrichment)
     env_use_llm = os.environ.get("AUDIT_USE_LLM", "").lower()
