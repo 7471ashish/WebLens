@@ -40,6 +40,11 @@ const progressFill = document.getElementById("progress-fill");
 const progressMessage = document.getElementById("progress-message");
 const terminateAuditBtn = document.getElementById("terminate-audit-btn");
 
+// Progress Preflight Elements
+const progressPreflight = document.getElementById("progress-preflight");
+const progressPreflightScore = document.getElementById("progress-preflight-score");
+const progressPreflightChips = document.getElementById("progress-preflight-chips");
+
 // Skeleton
 const resultsSkeleton = document.getElementById("results-skeleton");
 
@@ -54,6 +59,11 @@ const resultsSection = document.getElementById("results-section");
 const resultSiteTitle = document.getElementById("result-site-title");
 const resultTimestamp = document.getElementById("result-timestamp");
 const resultRuntime = document.getElementById("result-runtime");
+const exportJsonBtn = document.getElementById("export-json-btn");
+const exportMdBtn = document.getElementById("export-md-btn");
+const resultPreflight = document.getElementById("result-preflight");
+const resultPreflightScore = document.getElementById("result-preflight-score");
+const resultPreflightChips = document.getElementById("result-preflight-chips");
 const countCritical = document.getElementById("count-critical");
 const countHigh = document.getElementById("count-high");
 const countMedium = document.getElementById("count-medium");
@@ -126,6 +136,18 @@ function setupEventListeners() {
   startAuditBtn.addEventListener("click", initiateAudit);
   retryAuditBtn.addEventListener("click", retryAudit);
   terminateAuditBtn.addEventListener("click", terminateAudit);
+  if (exportJsonBtn) {
+    exportJsonBtn.addEventListener("click", () => {
+      const job = getActiveJob();
+      if (job) downloadJSONReport(job);
+    });
+  }
+  if (exportMdBtn) {
+    exportMdBtn.addEventListener("click", () => {
+      const job = getActiveJob();
+      if (job) downloadMarkdownReport(job);
+    });
+  }
 
   // Keep the target URL synced to whatever the browser's address bar shows.
   // This never needs to "lock" any more -- starting a new audit opens its own
@@ -343,6 +365,7 @@ async function initiateAudit() {
     label: hostnameOf(url),
     status: "queued",
     progress: null,
+    preflight: null,
     maxPercent: 0,
     result: null,
     error: null,
@@ -365,6 +388,7 @@ async function retryAudit() {
 
   job.status = "queued";
   job.progress = null;
+  job.preflight = null;
   job.maxPercent = 0;
   job.result = null;
   job.error = null;
@@ -556,17 +580,28 @@ function renderActiveTabContent() {
   }
 }
 
-function updateProgressDisplay(progress) {
+function updateProgressDisplay(progress, currentJob = null) {
+  const job = currentJob || getActiveJob();
   progressStageTag.textContent = (progress.stage || "Running").toUpperCase();
   const pct = Math.max(5, Math.min(100, progress.percent || 10));
   progressPercent.textContent = `${pct}%`;
   progressFill.style.width = `${pct}%`;
   progressMessage.textContent = progress.message || "Processing audit modules...";
+
+  const preflight = (job && job.preflight) || progress.preflight;
+  if (preflight && preflight.scanned && progressPreflight) {
+    renderPreflightBox(preflight, progressPreflight, progressPreflightScore, progressPreflightChips);
+  } else if (progressPreflight) {
+    progressPreflight.classList.add("hidden");
+  }
 }
 
 /** Applies a status/progress/result update to one job, then repaints it if visible. */
 async function applyJobUpdate(job, data) {
   job.status = data.status;
+  if (data.preflight || data.progress?.preflight) {
+    job.preflight = data.preflight || data.progress?.preflight;
+  }
   if (data.progress) {
     // Clamp so a later stage reporting a lower percent (or a stray/late SSE
     // event) can never make the loading bar visually move backward.
@@ -576,6 +611,9 @@ async function applyJobUpdate(job, data) {
   }
   if (data.status === "done") {
     job.result = data.result;
+    if (data.result?.preflight && !job.preflight) {
+      job.preflight = data.result.preflight;
+    }
     job.maxPercent = 100;
     if (job.progress) job.progress.percent = 100;
   }
@@ -673,6 +711,15 @@ function renderAuditResult(result) {
   }
   const runtime = result.meta?.runtime_seconds ? `${result.meta.runtime_seconds.toFixed(1)}s` : "N/A";
   resultRuntime.textContent = `Runtime: ${runtime}`;
+
+  // Pre-Flight Security Box in Results
+  const job = getActiveJob();
+  const preflight = (job && job.preflight) || result.preflight;
+  if (preflight && preflight.scanned && resultPreflight) {
+    renderPreflightBox(preflight, resultPreflight, resultPreflightScore, resultPreflightChips);
+  } else if (resultPreflight) {
+    resultPreflight.classList.add("hidden");
+  }
 
   // Telemetry Footer
   const cov = result.coverage || {};
@@ -810,11 +857,42 @@ function renderFindingsList(findings) {
           <div class="action-title">Suggested Action (${escapeHtml(actionPriority)})</div>
           <div class="action-text">${escapeHtml(actionSummary)}</div>
         </div>
+        <div class="finding-actions-row">
+          <button class="card-action-btn copy-prompt-btn" title="Copy ready-to-paste AI remediation prompt">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>Copy AI Fix Prompt</span>
+          </button>
+          <button class="card-action-btn locate-dom-btn" title="Highlight element on active page">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="22" y1="12" x2="18" y2="12"></line>
+              <line x1="6" y1="12" x2="2" y2="12"></line>
+              <line x1="12" y1="6" x2="12" y2="2"></line>
+              <line x1="12" y1="22" x2="12" y2="18"></line>
+            </svg>
+            <span>Locate on Page</span>
+          </button>
+        </div>
       </div>
     `;
 
     card.querySelector(".finding-header").addEventListener("click", () => {
       card.classList.toggle("open");
+    });
+
+    const copyBtn = card.querySelector(".copy-prompt-btn");
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      copyAiFixPrompt(finding, copyBtn);
+    });
+
+    const locateBtn = card.querySelector(".locate-dom-btn");
+    locateBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      locateFindingOnPage(finding, locateBtn);
     });
 
     findingsContainer.appendChild(card);
@@ -1188,4 +1266,474 @@ async function getOrCreateInstallId() {
     await browserApi.storage.local.set({ install_id });
   }
   return install_id;
+}
+
+/**
+ * Renders the Pre-Flight Security & Header box with security score badge and chips.
+ */
+function renderPreflightBox(preflight, boxEl, scoreEl, chipsEl) {
+  if (!preflight || !preflight.scanned || !boxEl) {
+    if (boxEl) boxEl.classList.add("hidden");
+    return;
+  }
+  boxEl.classList.remove("hidden");
+
+  // Score badge
+  const score = preflight.security_score ?? 0;
+  if (scoreEl) {
+    scoreEl.textContent = `Score: ${score}/100`;
+    scoreEl.className = "preflight-score-badge " + (score >= 70 ? "high" : score >= 40 ? "med" : "low");
+  }
+
+  // Chips
+  if (chipsEl) {
+    chipsEl.innerHTML = "";
+
+    // 1. HSTS
+    const hstsChip = document.createElement("span");
+    hstsChip.className = `preflight-chip ${preflight.hsts ? "pass" : "fail"}`;
+    hstsChip.textContent = preflight.hsts ? "✓ HSTS" : "✗ No HSTS";
+    chipsEl.appendChild(hstsChip);
+
+    // 2. CSP
+    const cspChip = document.createElement("span");
+    cspChip.className = `preflight-chip ${preflight.csp ? "pass" : "fail"}`;
+    cspChip.textContent = preflight.csp ? "✓ CSP" : "✗ No CSP";
+    chipsEl.appendChild(cspChip);
+
+    // 3. X-Frame-Options
+    const xfoChip = document.createElement("span");
+    xfoChip.className = `preflight-chip ${preflight.x_frame_options ? "pass" : "fail"}`;
+    xfoChip.textContent = preflight.x_frame_options ? `✓ XFO: ${preflight.x_frame_options}` : "✗ No XFO";
+    chipsEl.appendChild(xfoChip);
+
+    // 4. X-Content-Type-Options
+    const xctoChip = document.createElement("span");
+    xctoChip.className = `preflight-chip ${preflight.x_content_type_options ? "pass" : "fail"}`;
+    xctoChip.textContent = preflight.x_content_type_options ? "✓ nosniff" : "✗ No nosniff";
+    chipsEl.appendChild(xctoChip);
+
+    // 5. Protocol
+    const protoChip = document.createElement("span");
+    protoChip.className = "preflight-chip info";
+    protoChip.textContent = preflight.http_version ? String(preflight.http_version).toUpperCase() : "HTTP/1.1";
+    chipsEl.appendChild(protoChip);
+
+    // 6. Cache / ETag
+    if (preflight.cache_control) {
+      const cacheChip = document.createElement("span");
+      cacheChip.className = "preflight-chip info";
+      const cc = preflight.cache_control.length > 22 ? preflight.cache_control.slice(0, 20) + "..." : preflight.cache_control;
+      cacheChip.textContent = `Cache: ${cc}`;
+      chipsEl.appendChild(cacheChip);
+    } else if (preflight.etag) {
+      const etagChip = document.createElement("span");
+      etagChip.className = "preflight-chip info";
+      etagChip.textContent = "✓ ETag";
+      chipsEl.appendChild(etagChip);
+    }
+
+    // 7. Server
+    if (preflight.server) {
+      const srvChip = document.createElement("span");
+      srvChip.className = "preflight-chip info";
+      srvChip.textContent = `Server: ${preflight.server}`;
+      chipsEl.appendChild(srvChip);
+    }
+  }
+}
+
+/**
+ * Downloads canonical output.json for the completed audit.
+ */
+function downloadJSONReport(job) {
+  if (!job || !job.result) {
+    alert("No completed audit results to export for this tab.");
+    return;
+  }
+  const host = hostnameOf(job.url) || "site";
+  const dateTag = new Date().toISOString().slice(0, 10);
+  const jsonStr = JSON.stringify(job.result, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
+  const downloadUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = `weblens-audit-${host}-${dateTag}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(downloadUrl);
+}
+
+/**
+ * Generates and downloads an Executive Markdown (.md) summary report.
+ */
+function downloadMarkdownReport(job) {
+  if (!job || !job.result) {
+    alert("No completed audit results to export for this tab.");
+    return;
+  }
+  const result = job.result;
+  const host = hostnameOf(job.url) || "site";
+  const dateStr = result.audited_at ? new Date(result.audited_at).toLocaleString() : new Date().toLocaleString();
+  const summary = result.summary || {};
+  const coverage = result.coverage || {};
+  const meta = result.meta || {};
+  const preflight = job.preflight || result.preflight || null;
+
+  let md = `# WebLens Technical Health & Readiness Audit Report\n\n`;
+  md += `**Target Website:** [${job.url}](${job.url})\n`;
+  md += `**Audit Timestamp:** ${dateStr}\n`;
+  md += `**Runtime:** ${meta.runtime_seconds ? meta.runtime_seconds.toFixed(1) + "s" : "N/A"} | **Pages Crawled:** ${meta.pages_crawled || 1} | **Skills Evaluated:** ${coverage.skills_ok || 0}/${coverage.skills_run || 0}\n\n`;
+
+  // Pre-flight section
+  if (preflight && preflight.scanned) {
+    md += `## ⚡ Pre-Flight Security & Headers\n\n`;
+    md += `| Check | Status | Details |\n`;
+    md += `| :--- | :--- | :--- |\n`;
+    md += `| **Security Score** | **${preflight.security_score || 0}/100** | Initial fast evaluation |\n`;
+    md += `| **HTTP Version** | \`${preflight.http_version || "HTTP/1.1"}\` | Response protocol |\n`;
+    md += `| **HSTS** | ${preflight.hsts ? "✅ Enabled" : "❌ Missing"} | Strict-Transport-Security |\n`;
+    md += `| **CSP** | ${preflight.csp ? "✅ Configured" : "❌ Missing"} | Content-Security-Policy |\n`;
+    md += `| **X-Frame-Options** | ${preflight.x_frame_options ? "✅ " + preflight.x_frame_options : "❌ Missing"} | Clickjacking defense |\n`;
+    md += `| **Cache-Control** | \`${preflight.cache_control || "None"}\` | Browser caching |\n`;
+    md += `| **ETag** | ${preflight.etag ? "✅ Present" : "❌ Missing"} | Entity tag validation |\n`;
+    if (preflight.server) md += `| **Server** | \`${preflight.server}\` | Web server software |\n`;
+    md += `\n`;
+  }
+
+  // Summary Metrics Table
+  md += `## 📊 Executive Summary\n\n`;
+  md += `| Critical | High | Medium | Low | Total Findings |\n`;
+  md += `| :---: | :---: | :---: | :---: | :---: |\n`;
+  md += `| **${summary.critical || 0}** | **${summary.high || 0}** | **${summary.medium || 0}** | **${summary.low || 0}** | **${summary.total_findings || 0}** |\n\n`;
+
+  // Findings Breakdown
+  md += `## 🔍 Findings & Remediation Plan\n\n`;
+  const findings = result.findings || [];
+  if (findings.length === 0) {
+    md += `*No technical defects detected. Site is operating within recommended parameters.*\n\n`;
+  } else {
+    const sevOrder = { critical: 1, high: 2, medium: 3, low: 4 };
+    const sorted = [...findings].sort((a, b) => {
+      const sa = sevOrder[(a.severity || "").toLowerCase()] || 5;
+      const sb = sevOrder[(b.severity || "").toLowerCase()] || 5;
+      return sa - sb;
+    });
+
+    sorted.forEach((f, idx) => {
+      const sev = (f.severity || "LOW").toUpperCase();
+      const tier = (f.evidence_tier || "heuristic").toUpperCase();
+      md += `### ${idx + 1}. [${sev}] ${f.title || "Audit Finding"} (${f.id || "GEN"})\n\n`;
+      md += `- **Evidence Tier:** \`${tier}\`\n`;
+      if (f.evidence) {
+        const evStr = typeof f.evidence === "string" ? f.evidence : JSON.stringify(f.evidence, null, 2);
+        md += `- **Evidence:**\n  \`\`\`\n  ${evStr}\n  \`\`\`\n`;
+      }
+      if (f.suggested_action) {
+        md += `- **Remediation Action (${f.suggested_action.priority || "P2"}):** ${f.suggested_action.summary || "Inspect and resolve."}\n`;
+      }
+      md += `\n---\n\n`;
+    });
+  }
+
+  md += `\n*Generated by WebLens AI Technical Auditor on ${dateStr}*\n`;
+
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  const downloadUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = `weblens-audit-${host}-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(downloadUrl);
+}
+
+/**
+ * Copies an engineered AI fix prompt ready to paste into Cursor, Copilot, or ChatGPT.
+ */
+async function copyAiFixPrompt(finding, btn) {
+  const job = getActiveJob();
+  const url = job?.url || targetUrlInput.value || "Active Website";
+  const sev = (finding.severity || "medium").toUpperCase();
+  const tier = (finding.evidence_tier || "heuristic").toUpperCase();
+  const actionSummary = finding.suggested_action?.summary || "Inspect and resolve.";
+  const actionPriority = finding.suggested_action?.priority || sev;
+
+  let evidenceStr = "";
+  if (typeof finding.evidence === "string") {
+    evidenceStr = finding.evidence;
+  } else if (finding.evidence) {
+    try {
+      evidenceStr = JSON.stringify(finding.evidence, null, 2);
+    } catch {
+      evidenceStr = String(finding.evidence);
+    }
+  } else {
+    evidenceStr = "No diagnostic evidence recorded.";
+  }
+
+  const promptText = `### WebLens Defect Remediation: [${finding.id || "DEFECT"}] ${finding.title || "Audit Finding"}
+- **Target URL:** ${url}
+- **Severity:** ${sev}
+- **Evidence Tier:** ${tier}
+- **Action Priority:** ${actionPriority}
+
+#### Defect Evidence & Technical Context:
+\`\`\`
+${evidenceStr}
+\`\`\`
+
+#### Recommended Remediation:
+${actionSummary}
+
+#### Task for AI Assistant:
+Please analyze the defect, evidence, and remediation suggestion above. Provide the exact code fix, configuration change, or CSS/HTML patch required to fix this issue according to modern web best practices. Explain the root cause and provide verification instructions.`;
+
+  try {
+    await navigator.clipboard.writeText(promptText);
+    btn.classList.add("copied");
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = `<span>✓ Copied Prompt!</span>`;
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.innerHTML = originalHtml;
+    }, 2000);
+  } catch (err) {
+    console.error("[WebLens] Clipboard write failed, falling back to textarea:", err);
+    const ta = document.createElement("textarea");
+    ta.value = promptText;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    btn.classList.add("copied");
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = `<span>✓ Copied Prompt!</span>`;
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.innerHTML = originalHtml;
+    }, 2000);
+  }
+}
+
+/**
+ * Highlights offending element or shows guidance banner directly on the active webpage.
+ */
+async function locateFindingOnPage(finding, btn) {
+  try {
+    btn.classList.add("locating");
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      alert("No active tab found. Please switch to the browser tab you wish to inspect.");
+      return;
+    }
+
+    if (!tab.url || (!tab.url.startsWith("http://") && !tab.url.startsWith("https://"))) {
+      alert("Element location only operates on active HTTP or HTTPS web pages.");
+      return;
+    }
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: inPageHighlightFunction,
+      args: [{
+        id: finding.id || "GEN",
+        title: finding.title || "",
+        severity: finding.severity || "low",
+        evidence: typeof finding.evidence === "string" ? finding.evidence : JSON.stringify(finding.evidence),
+        action: finding.suggested_action?.summary || ""
+      }]
+    });
+
+    const res = results && results[0] ? results[0].result : null;
+    const originalHtml = btn.innerHTML;
+    if (res && res.matched) {
+      btn.innerHTML = `<span>✓ Located &lt;${res.tag}&gt;</span>`;
+    } else {
+      btn.innerHTML = `<span>Not on DOM</span>`;
+    }
+
+    setTimeout(() => {
+      btn.innerHTML = originalHtml;
+      btn.classList.remove("locating");
+    }, 2500);
+
+  } catch (err) {
+    console.warn("[WebLens] locateFindingOnPage failed:", err);
+    alert(`Cannot inspect DOM: ${err.message || err}`);
+  } finally {
+    btn.classList.remove("locating");
+  }
+}
+
+/**
+ * Self-contained DOM inspection and highlight script executed directly inside the active webpage.
+ */
+function inPageHighlightFunction(finding) {
+  const oldOverlay = document.getElementById("weblens-highlight-overlay");
+  if (oldOverlay) oldOverlay.remove();
+  const oldBanner = document.getElementById("weblens-page-banner");
+  if (oldBanner) oldBanner.remove();
+
+  if (!document.getElementById("weblens-pulse-style")) {
+    const style = document.createElement("style");
+    style.id = "weblens-pulse-style";
+    style.textContent = `
+      @keyframes weblens-pulse-glow {
+        0% { box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.9), 0 0 16px rgba(217, 119, 87, 0.4); }
+        50% { box-shadow: 0 0 0 9px rgba(217, 119, 87, 0.25), 0 0 24px rgba(217, 119, 87, 0.6); }
+        100% { box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.9), 0 0 16px rgba(217, 119, 87, 0.4); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  let targetEl = null;
+  const evText = (typeof finding.evidence === "string" ? finding.evidence : JSON.stringify(finding.evidence || "")).toLowerCase();
+  const titleText = (finding.title || "").toLowerCase();
+
+  // Strategy 1: Explicit CSS selector in evidence
+  const selectorMatch = evText.match(/selector:\s*['"]([^'"]+)['"]/i) || evText.match(/selector:\s*([^\s,;]+)/i);
+  if (selectorMatch && selectorMatch[1]) {
+    try {
+      const candidate = document.querySelector(selectorMatch[1]);
+      if (candidate) targetEl = candidate;
+    } catch (e) {}
+  }
+
+  // Strategy 2: Image / Alt attribute issues
+  if (!targetEl && (titleText.includes("image") || titleText.includes("alt") || evText.includes("img") || evText.includes("alt"))) {
+    const badImgs = Array.from(document.querySelectorAll("img:not([alt]), img[alt='']"));
+    if (badImgs.length > 0) {
+      targetEl = badImgs[0];
+    } else {
+      const anyImg = document.querySelector("img");
+      if (anyImg) targetEl = anyImg;
+    }
+  }
+
+  // Strategy 3: Heading issues
+  if (!targetEl && (titleText.includes("heading") || titleText.includes("h1") || evText.includes("h1"))) {
+    const h1 = document.querySelector("h1");
+    if (h1) targetEl = h1;
+    else targetEl = document.querySelector("h2, h3, header");
+  }
+
+  // Strategy 4: Button / Interactive / CTA issues
+  if (!targetEl && (titleText.includes("button") || titleText.includes("cta") || evText.includes("button") || evText.includes("click"))) {
+    const btn = document.querySelector("button, [role='button'], input[type='submit'], a.btn, a.button");
+    if (btn) targetEl = btn;
+  }
+
+  // Strategy 5: Link / Anchor issues
+  if (!targetEl && (titleText.includes("link") || titleText.includes("anchor") || evText.includes("href"))) {
+    const link = document.querySelector("a[href]");
+    if (link) targetEl = link;
+  }
+
+  // Strategy 6: Form / Input issues
+  if (!targetEl && (titleText.includes("input") || titleText.includes("label") || titleText.includes("form"))) {
+    const input = document.querySelector("input:not([type='hidden']), select, textarea");
+    if (input) targetEl = input;
+  }
+
+  // Strategy 7: Search by text snippet mentioned in evidence
+  if (!targetEl) {
+    const quotes = evText.match(/["']([^"']{4,40})["']/g);
+    if (quotes) {
+      for (const q of quotes) {
+        const raw = q.slice(1, -1).trim();
+        if (raw.length >= 4) {
+          const allEls = Array.from(document.querySelectorAll("p, span, a, h1, h2, h3, div, button"));
+          const matchEl = allEls.find((el) => el.children.length === 0 && el.innerText && el.innerText.toLowerCase().includes(raw.toLowerCase()));
+          if (matchEl) {
+            targetEl = matchEl;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (targetEl) {
+    targetEl.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+
+    const rect = targetEl.getBoundingClientRect();
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+
+    const overlay = document.createElement("div");
+    overlay.id = "weblens-highlight-overlay";
+    overlay.style.position = "absolute";
+    overlay.style.top = `${rect.top + scrollY - 4}px`;
+    overlay.style.left = `${rect.left + scrollX - 4}px`;
+    overlay.style.width = `${Math.max(24, rect.width + 8)}px`;
+    overlay.style.height = `${Math.max(24, rect.height + 8)}px`;
+    overlay.style.border = "3px solid #d97757";
+    overlay.style.borderRadius = "6px";
+    overlay.style.zIndex = "2147483640";
+    overlay.style.pointerEvents = "auto";
+    overlay.style.animation = "weblens-pulse-glow 1.4s ease-in-out infinite";
+    overlay.style.cursor = "pointer";
+    overlay.title = "WebLens: Click to dismiss highlight";
+
+    const badge = document.createElement("div");
+    badge.style.position = "absolute";
+    badge.style.bottom = "calc(100% + 6px)";
+    badge.style.left = "0";
+    badge.style.background = "#1f1e1d";
+    badge.style.color = "#ffffff";
+    badge.style.padding = "4px 8px";
+    badge.style.borderRadius = "5px";
+    badge.style.fontSize = "11px";
+    badge.style.fontWeight = "700";
+    badge.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+    badge.style.whiteSpace = "nowrap";
+    badge.style.boxShadow = "0 2px 8px rgba(0,0,0,0.3)";
+    badge.style.display = "flex";
+    badge.style.alignItems = "center";
+    badge.style.gap = "6px";
+
+    const safeTitle = (finding.title || "Audit Finding").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    badge.innerHTML = `<span style="background:#d97757; color:#fff; padding:1px 5px; border-radius:3px; font-size:10px;">${finding.id}</span> <span>${safeTitle.slice(0, 45)}</span> <span style="opacity:0.6; font-size:12px; margin-left:4px;">✕</span>`;
+    overlay.appendChild(badge);
+
+    overlay.addEventListener("click", () => overlay.remove());
+    document.body.appendChild(overlay);
+
+    setTimeout(() => {
+      if (overlay.parentNode) overlay.remove();
+    }, 8000);
+
+    return { matched: true, tag: targetEl.tagName.toLowerCase() };
+  }
+
+  // Fallback: Page/Header level finding banner
+  const banner = document.createElement("div");
+  banner.id = "weblens-page-banner";
+  banner.style.position = "fixed";
+  banner.style.top = "18px";
+  banner.style.left = "50%";
+  banner.style.transform = "translateX(-50%)";
+  banner.style.background = "#1f1e1d";
+  banner.style.color = "#ffffff";
+  banner.style.border = "1px solid #d97757";
+  banner.style.borderRadius = "8px";
+  banner.style.padding = "8px 16px";
+  banner.style.fontSize = "12px";
+  banner.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+  banner.style.zIndex = "2147483647";
+  banner.style.boxShadow = "0 4px 16px rgba(0,0,0,0.35)";
+  banner.style.cursor = "pointer";
+  const safeTitle = (finding.title || "Audit Finding").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  banner.innerHTML = `<span style="color:#d97757; font-weight:700;">WebLens:</span> Page/Header Level Finding (<strong>${finding.id}</strong>: ${safeTitle.slice(0, 45)}) — No specific DOM element match.`;
+  banner.addEventListener("click", () => banner.remove());
+  document.body.appendChild(banner);
+  setTimeout(() => {
+    if (banner.parentNode) banner.remove();
+  }, 4500);
+
+  return { matched: false, reason: "Page-level issue" };
 }

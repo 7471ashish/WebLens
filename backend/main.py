@@ -131,6 +131,7 @@ class AuditStatusResponse(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     progress: Optional[dict[str, Any]] = None
+    preflight: Optional[dict[str, Any]] = None
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -276,6 +277,7 @@ async def stream_audit(job_id: str, request: Request):
                     "job_id": job_id,
                     "status": current_status,
                     "progress": progress,
+                    "preflight": current_job.get("preflight"),
                     "result": current_job.get("result") if current_status == "done" else None,
                     "error": current_job.get("error") if current_status == "failed" else None,
                 }

@@ -1,16 +1,19 @@
 # WebLens — System Architecture & Background Job Execution
 
-This document details the production architecture, background job execution model, sandbox isolation guarantees, Server-Sent Events (SSE) protocol, and failure resilience mechanisms implemented in WebLens.
+This document details the production architecture, background job execution model, sandbox isolation guarantees, Server-Sent Events (SSE) protocol, evidence parsing and normalization engine, and failure resilience mechanisms implemented in WebLens.
 
 ---
 
 ## 1. System Overview & Architecture
 
 WebLens upgrades an offline Python audit pipeline (`agent/`) into an asynchronous, distributed-ready architecture consisting of:
-1. **Manifest V3 Chrome Extension:** Side panel interface providing active tab synchronization, credential management, real-time stage progress, and interactive findings triage.
-2. **FastAPI Asynchronous Gateway (`backend/`):** REST API with non-blocking job acceptance, sliding-window rate limiting, and SSRF filtering.
-3. **Subprocess Isolation Engine (`job_runner.py`):** Sandboxed subprocess-per-job worker executing multi-page Playwright Chromium crawls without modifying read-only agent files.
-4. **Server-Sent Events (SSE) Event Stream:** Persistent, event-driven unidirectional channel emitting updates strictly upon major lifecycle milestones.
+1. **Manifest V3 Chrome Extension:** Side panel interface providing active tab synchronization, parallel audit tab management, instant pre-flight telemetry, real-time stage progress, interactive in-page element highlighting, 1-click AI fix prompt generation, and report exports.
+2. **FastAPI Asynchronous Gateway (`backend/`):** REST API with non-blocking job acceptance, sliding-window rate limiting, SSRF filtering, and in-flight job cancellation (`POST /audits/{job_id}/cancel`).
+3. **Instant Pre-Flight Scanner (`run_preflight_scan`):** Sub-500ms asynchronous HTTP security and header inspector emitting HSTS, CSP, X-Frame-Options, MIME sniffing (`nosniff`), cache control, and HTTP/2 metrics before Chromium launches.
+4. **Subprocess Isolation Engine (`job_runner.py`):** Sandboxed subprocess-per-job worker executing multi-page Playwright Chromium crawls without modifying read-only agent files.
+5. **Server-Sent Events (SSE) Event Stream:** Persistent, event-driven unidirectional channel emitting updates strictly upon major lifecycle milestones.
+6. **Local Archival & Export Subsystem (`audit_reports/`):** Automated persistence of canonical audit results to timestamped JSON archives and one-click JSON/Markdown executive summary exports.
+7. **Structured Evidence Normalization Engine:** Resilient client-side lexer (`pyToJson`) and pattern dispatcher converting raw Python telemetry and complex data structures into interactive route badges, stat chips, and editorial callout cards.
 
 ```mermaid
 flowchart TD
@@ -23,7 +26,12 @@ flowchart TD
     Ext -->|"5. Connect EventSource"| SSE["GET /audits/:job_id/stream"]
     
     API -.->|"6. BackgroundTask"| Runner["AuditJobRunner"]
-    Runner -->|"7. Acquire Slot"| Sem{"Semaphore (Max 3)"}
+    Runner -->|"7a. Fast Pre-Flight Scan (<500ms)"| Preflight["run_preflight_scan (httpx)"]
+    Preflight -->|"Headers, HSTS, CSP, XFO"| Store
+    Store -->|"Early Milestone (stage: preflight, 8%)"| SSE
+    SSE -->|"Instant Security Chips (<500ms)"| Ext
+
+    Runner -->|"7b. Acquire Slot"| Sem{"Semaphore (Max 3)"}
     Sem -->|"8. Clone Sandbox"| Sandbox["Ephemeral Sandbox Directory"]
     Runner -->|"9. Spawn Process"| Sub["Subprocess (run_master_audit.py)"]
     
@@ -37,8 +45,13 @@ flowchart TD
     
     Sub -->|"Writes output.json"| Sandbox
     Runner -->|"Parse & Clean Sandbox"| Store
+    Runner -->|"Auto-Archive Report"| Archive[("audit_reports/output_<id>_<time>.json")]
     Store -->|"Final Event (status: done)"| SSE
     SSE -->|"Complete Stream"| Ext
+
+    Ext -->|"Locate on Page"| DOM["In-Page Highlight (chrome.scripting)"]
+    Ext -->|"Copy Fix Prompt"| Clip["Remediation Prompt -> Clipboard"]
+    Ext -->|"Export Reports"| Files["JSON / Markdown Downloads"]
 ```
 
 ---
@@ -46,7 +59,7 @@ flowchart TD
 ## 2. End-to-End Background Job Lifecycle
 
 ### Phase 1: Request Acceptance & Non-Blocking Handshake
-1. The user clicks **"Audit This Page"** in the Chrome Extension side panel.
+1. The user clicks **"Audit This Page"** in the Chrome Extension side panel (or opens a parallel tab in the side panel).
 2. The side panel makes an HTTP `POST /audits` request containing:
    ```json
    {
@@ -62,6 +75,21 @@ flowchart TD
    - A UUID `job_id` is generated and saved in `JobStore` with status `"queued"`.
 6. **Instant Response:**
    - FastAPI dispatches `job_runner.run_job` via `BackgroundTasks` and immediately returns `HTTP 202 Accepted` in under 5 milliseconds.
+
+---
+
+### Phase 1b: Instant Pre-Flight Security & Header Scan (< 500ms)
+Before acquiring a concurrency semaphore slot and before Playwright boots headless Chromium (which typically takes 2–5 seconds), `AuditJobRunner` executes a lightweight asynchronous network probe:
+1. `run_preflight_scan(url)` executes via `httpx.AsyncClient(timeout=4.0, follow_redirects=True)` using `HEAD` with fallback to `GET` (range 0–1024 bytes).
+2. Inspects key security and protocol headers:
+   - **HSTS:** `Strict-Transport-Security` presence.
+   - **CSP:** `Content-Security-Policy` presence.
+   - **Clickjacking Protection:** `X-Frame-Options` directive (`DENY`, `SAMEORIGIN`).
+   - **MIME Sniffing:** `X-Content-Type-Options: nosniff`.
+   - **Caching & Performance:** `Cache-Control`, `ETag`, `Server` banner, and HTTP version (`HTTP/2` vs `1.1`).
+   - Computes a 0–100 **Security Score**.
+3. Telemetry is immediately saved to `JobStore` and emitted over SSE (`stage: "preflight"`, `percent: 8`).
+4. The user sees security badges and header evaluation in under 500ms, providing instant perceived value while the deep crawler initializes.
 
 ---
 
@@ -119,7 +147,7 @@ On Windows, standard `asyncio.create_subprocess_exec` raises `NotImplementedErro
 **Solution:**
 WebLens executes the worker in an OS-agnostic thread via `asyncio.to_thread(_run_subprocess_worker, ...)`:
 - Invokes Python's standard `subprocess.Popen([sys.executable, "run_master_audit.py", target_url], cwd=temp_agent_dir)`.
-- Spawns two background daemon reader threads for non-blocking line-by-line streaming of `stdout` and `stderr`.
+- Spawns background daemon reader threads for non-blocking line-by-line streaming of `stdout` and `stderr`.
 - Enforces a **260-second hard execution ceiling**. If a run hangs, the process tree is terminated, and the job is marked `"failed"`.
 
 ---
@@ -135,6 +163,7 @@ To conserve network and rendering overhead, events are emitted **strictly when a
 | Stage ID | Progress % | Detected Stdout Trigger | Activity Description |
 | :--- | :--- | :--- | :--- |
 | `starting` | 5% | Worker launch | Initializing isolated sandbox |
+| `preflight` | 8% | Pre-flight completion | Sub-500ms security headers evaluation |
 | `crawling` | 15% | Subprocess start | Launching Chromium & discovering subpages |
 | `init` | 10% | `"master website audit execution for"` | Audit modules initialized |
 | `diagnostic`| 20% | `"[llm diagnostic]"` | Verifying Groq / OpenAI LLM round-trip |
@@ -154,6 +183,20 @@ data: {
     "percent": 60,
     "message": "Running Engagement, Multimodal & Accessibility skills..."
   },
+  "preflight": {
+    "scanned": true,
+    "status_code": 200,
+    "http_version": "HTTP/2",
+    "hsts": true,
+    "csp": true,
+    "x_frame_options": "DENY",
+    "x_content_type_options": "nosniff",
+    "cache_control": "public, max-age=3600",
+    "etag": true,
+    "server": "cloudflare",
+    "security_score": 100,
+    "highlights": []
+  },
   "result": null,
   "error": null
 }
@@ -163,45 +206,126 @@ When status reaches `"done"`, `result` contains the full canonical audit JSON an
 
 ---
 
-### Phase 5: Finalization & Teardown
+### Phase 4b: Job Cancellation & User Termination Protocol
+Users can terminate an in-flight audit at any time by clicking **"Terminate Audit"** in the Side Panel:
+1. Extension issues `POST /audits/{job_id}/cancel`.
+2. Gateway tears down active EventSource streams.
+3. `AuditJobRunner` terminates the underlying Chromium subprocess tree immediately.
+4. Ephemeral sandbox directories are pruned and the job status transitions to `"terminated"`.
+
+---
+
+### Phase 5: Finalization, Archival & Teardown
 
 1. `run_master_audit.py` finishes and writes canonical findings to `<temp_agent_dir>/output.json`.
 2. `job_runner.py` reads and validates `output.json`.
-3. `job_store` is updated:
+3. **Local Disk Auto-Archiving:**
+   - Copies canonical report to `audit_reports/output.json`.
+   - Creates an immutable timestamped archive: `audit_reports/output_<job_id[:8]>_<timestamp>.json`.
+   - Ensures historical audits are safely persisted on disk without modifying `agent/`.
+4. `job_store` is updated:
    - `status = "done"`
    - `result = report_data`
    - `finished_at = <ISO-8601 timestamp>`
-4. The final SSE event is dispatched with full report payloads.
-5. In a `finally:` block:
+5. The final SSE event is dispatched with full report payloads.
+6. In a `finally:` block:
    - Ephemeral directory `<temp_dir>` is securely deleted (`shutil.rmtree`).
    - The semaphore slot is released for the next queued job.
 
 ---
 
-## 3. State Transition Model
+## 3. Presentation Layer & Evidence Normalization Engine
+
+### Multi-Tab Parallel Audit Management
+The Chrome Extension Side Panel supports parallel audits using a browser-tab-like strip (`#audit-tabs`):
+- Each audited URL spawns an independent job tab with a live status dot (`dot-running`, `dot-done`, `dot-failed`).
+- Users can switch between tabs without interrupting background crawling or SSE telemetry.
+- Finished tabs feature close buttons (`×`) to free session storage.
+
+### Resilient Python-to-JSON Lexer (`pyToJson`)
+Evidence emitted by multi-page agent skills often contains stringified Python data structures (`dict`, `list`, `True`, `False`, `None`, and single-quoted strings). Standard `JSON.parse(str.replace(/'/g, '"'))` fails when values contain English apostrophes (e.g. `Nor'easter`, `Miller's Law`, `img-002's`).
+
+WebLens incorporates a dedicated tokenizer in [`side_panel.js`](file:///C:/Users/rg060/Desktop/Work/Website/Hackathon/Web%20Lens/WebLens/extension/side_panel.js):
+- Respects string boundaries (`'`, `"`) and escape characters (`\'`, `\"`, `\\`), preserving apostrophes inside values.
+- Converts bare Python literals (`True` -> `true`, `False` -> `false`, `None` -> `null`) without regex text corruption.
+- Parses nested dicts and lists safely into native JavaScript objects.
+
+### Multi-Pattern Evidence Dispatcher
+The `renderEvidence` engine categorizes and renders evidence into structured UI components:
+
+```
+finding.evidence Input
+  ├── Direct URL Block: URL '<url>' (<page_type>): <dict>
+  │     └── Renders Route Type Badge + Clickable Page Link + Labeled Stat Chips
+  ├── Multi-Page Rollup: Audited N pages... Sample telemetry: <list>
+  │     └── Renders Prose Summary + Clean Telemetry Bullet List (no raw bracket syntax)
+  ├── Parenthetical Metadata: ... (nav_item_count: 20; items: [...])
+  │     └── Renders Semicolon-delimited Key Chips + Interactive Nav Link Pills
+  ├── Qualitative Critique: {'qualitative_critique': '...'}
+  │     └── Renders Styled Editorial Callout Quote Box
+  ├── Legacy DOM Comparator: (source: ..., field: ..., value: ..., details: ...)
+  │     └── Renders Structured Evidence Table (Source, Field, Value chips, Details chips)
+  └── Text with URLs:
+        └── Auto-linkifies embedded URLs for 1-click inspection
+```
+
+### Live In-Page Element Highlighting
+Users can inspect offending elements on the live webpage by clicking **"Locate on Page"** on any finding card:
+1. Side Panel queries the active browser tab via `chrome.tabs.query`.
+2. Executes an in-page DOM script via `chrome.scripting.executeScript`.
+3. Targets elements using multiple heuristics:
+   - CSS selectors extracted from finding evidence.
+   - Missing-alt and defective images (`img:not([alt])`, `img[alt=""]`).
+   - Headings (`h1`, `h2`), buttons/CTAs (`[role="button"]`, `.btn`), links (`a[href]`), and form controls.
+   - Quoted text snippet matching.
+4. **Visual Highlights:**
+   - Scrolls the element into center view (`scrollIntoView({ behavior: 'smooth', block: 'center' })`).
+   - Injects a pulsating glowing outline (`#weblens-highlight-overlay`) with a floating dismissal badge.
+   - Displays a top notification banner if the finding is page-wide or HTTP-header level.
+
+### AI Remediation Prompt Engineering
+Finding cards feature a **"Copy AI Fix Prompt"** button:
+- Compiles an engineered remediation prompt with Finding ID, Title, Severity, Evidence Tier, Diagnostic Data, Suggested Action, and Task Instructions.
+- Formatted in Markdown ready to paste into Cursor, Claude, ChatGPT, or GitHub Copilot.
+- Transitions to a green `✓ Copied Prompt!` feedback state.
+
+### One-Click Report Exports
+- **Export JSON:** Generates and downloads canonical `weblens-audit-<domain>-<date>.json`.
+- **Export Markdown:** Generates an executive Markdown report with target metadata, pre-flight security table, executive metrics matrix, and categorized findings with remediation tasks.
+
+---
+
+## 4. State Transition Model
 
 ```mermaid
 stateDiagram-v2
     [*] --> queued: POST /audits accepted
     queued --> running: Semaphore slot acquired
-    running --> running: Major stage transition
+    running --> running: Pre-flight scan (<500ms)
+    running --> running: Major stage transition (crawling, domain_skills, aggregating)
     
     running --> done: Return code 0 and valid output.json
+    running --> terminated: User clicks Terminate Audit (POST /audits/:id/cancel)
     running --> failed: Nonzero exit code or unparseable JSON
     running --> failed: Timeout expired (exceeding 260s)
     
-    done --> [*]: Stream closed and client notified
+    done --> [*]: Stream closed, report archived to disk, client notified
+    terminated --> [*]: Process killed, sandbox cleaned, client notified
     failed --> [*]: Stream closed and error displayed
 ```
 
 ---
 
-## 4. Key Architectural Guarantees
+## 5. Key Architectural Guarantees
 
 | Concern | Implementation Mechanism | Guarantee |
 | :--- | :--- | :--- |
 | **Agent Immutability** | Byte-for-byte copy into per-job temporary sandbox | Zero modifications or restructuring of `agent/` codebase. |
+| **Pre-Flight Speed** | Asynchronous `httpx` probe before Chromium launch | Returns security score, HSTS, CSP, and XFO badges in **under 500ms**. |
 | **Secret Hygiene** | `SecretSanitizingFilter` regex masking on all loggers | Groq API keys (`gsk_...`) never appear in logs, error traces, or stored records. |
 | **SSRF Prevention** | Pre-flight DNS resolution & IP blocklisting | Blocks attacks against `localhost`, AWS metadata, cloud VPCs, and non-HTTP schemes. |
-| **Crash-Free Monitoring**| Native `EventSource` (SSE) with stage diff gating | Replaces polling loops; emits ~8 events per audit instead of hundreds of poll requests. |
+| **Crash-Free Monitoring**| Native `EventSource` (SSE) with stage diff gating | Replaces polling loops; emits ~9 events per audit instead of hundreds of poll requests. |
+| **User Control** | `POST /audits/{job_id}/cancel` + Process Tree Kill | In-flight jobs can be safely cancelled at any stage without orphan processes. |
+| **Safe Evidence Tokenization** | Resilient `pyToJson` character-by-character lexer | Never breaks on English apostrophes (`Nor'easter`, `Miller's Law`); 100% clean parsing. |
+| **Local Report Persistence** | Dual auto-archive to `audit_reports/` | Preserves canonical `output.json` and timestamped historical records permanently. |
 | **Deterministic Fallback**| Fail-soft qualitative heuristics | Pipeline generates full reports even when LLM keys are absent, expired, or offline. |
