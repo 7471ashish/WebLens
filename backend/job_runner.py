@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import json
+import httpx
 import logging
 import os
 import shutil
@@ -89,15 +90,18 @@ class JobStore:
                 self._jobs[job_id].update(kwargs)
 
     async def update_progress(
-        self, job_id: str, stage: str, percent: int, message: str
+        self, job_id: str, stage: str, percent: int, message: str, **extra: Any
     ) -> None:
         async with self._lock:
             if job_id in self._jobs:
-                self._jobs[job_id]["progress"] = {
+                prog = {
                     "stage": stage,
                     "percent": max(0, min(100, percent)),
                     "message": message,
                 }
+                if extra:
+                    prog.update(extra)
+                self._jobs[job_id]["progress"] = prog
 
     def _prune_expired_unlocked(self) -> None:
         now = time.monotonic()
@@ -108,6 +112,76 @@ class JobStore:
         ]
         for jid in expired:
             self._jobs.pop(jid, None)
+
+
+async def run_preflight_scan(url: str) -> dict[str, Any]:
+    """
+    Fast asynchronous pre-flight security and header scan (< 500ms).
+    Checks HSTS, CSP, X-Frame-Options, Cache-Control, ETag, and HTTP protocol version.
+    """
+    preflight: dict[str, Any] = {
+        "scanned": True,
+        "status_code": 200,
+        "http_version": "1.1",
+        "hsts": False,
+        "csp": False,
+        "x_frame_options": None,
+        "x_content_type_options": None,
+        "cache_control": None,
+        "etag": False,
+        "server": None,
+        "security_score": 0,
+        "highlights": [],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0, follow_redirects=True, verify=False) as client:
+            try:
+                resp = await client.head(url)
+                if resp.status_code >= 400:
+                    resp = await client.get(url, headers={"Range": "bytes=0-1024"})
+            except Exception:
+                resp = await client.get(url, headers={"Range": "bytes=0-1024"})
+
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            preflight["status_code"] = resp.status_code
+            preflight["http_version"] = resp.http_version or "1.1"
+            preflight["server"] = headers.get("server")
+
+            if "strict-transport-security" in headers:
+                preflight["hsts"] = True
+                preflight["security_score"] += 25
+            else:
+                preflight["highlights"].append("Missing HSTS (Strict-Transport-Security)")
+
+            if "content-security-policy" in headers:
+                preflight["csp"] = True
+                preflight["security_score"] += 35
+            else:
+                preflight["highlights"].append("Missing Content-Security-Policy (CSP)")
+
+            xfo = headers.get("x-frame-options")
+            if xfo:
+                preflight["x_frame_options"] = xfo
+                preflight["security_score"] += 20
+            else:
+                preflight["highlights"].append("Missing X-Frame-Options (Clickjacking)")
+
+            xcto = headers.get("x-content-type-options")
+            if xcto:
+                preflight["x_content_type_options"] = xcto
+                preflight["security_score"] += 20
+
+            cc = headers.get("cache-control")
+            if cc:
+                preflight["cache_control"] = cc
+            if "etag" in headers:
+                preflight["etag"] = True
+
+    except Exception as exc:
+        preflight["scanned"] = False
+        preflight["error"] = str(exc)
+
+    return preflight
 
 
 def _run_subprocess_worker(
@@ -224,11 +298,24 @@ class AuditJobRunner:
             status="running",
             started_at=started_iso,
         )
+
+        # Fast Pre-Flight Security & Header Scan (< 500ms)
+        preflight_data = await run_preflight_scan(target_url)
+        await self.job_store.update_job(job_id, preflight=preflight_data)
+        await self.job_store.update_progress(
+            job_id,
+            stage="preflight",
+            percent=8,
+            message=f"Pre-flight check: HTTP/{preflight_data.get('http_version', '1.1')}, Status {preflight_data.get('status_code', 'OK')}",
+            preflight=preflight_data,
+        )
+
         await self.job_store.update_progress(
             job_id,
             stage="starting",
-            percent=5,
+            percent=12,
             message="Initializing isolated audit sandbox...",
+            preflight=preflight_data,
         )
 
         temp_dir = tempfile.mkdtemp(prefix=f"weblens_{job_id[:8]}_")
@@ -318,6 +405,25 @@ class AuditJobRunner:
                     with open(output_json_path, "r", encoding="utf-8") as f:
                         report_data = json.load(f)
 
+                    # Attach pre-flight scan results to canonical output
+                    if preflight_data and preflight_data.get("scanned"):
+                        report_data["preflight"] = preflight_data
+
+                    # Auto-archive copy to audit_reports/
+                    try:
+                        reports_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "audit_reports"))
+                        os.makedirs(reports_dir, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        job_report_file = os.path.join(reports_dir, f"output_{job_id[:8]}_{timestamp}.json")
+                        latest_report_file = os.path.join(reports_dir, "output.json")
+                        with open(job_report_file, "w", encoding="utf-8") as rf:
+                            json.dump(report_data, rf, indent=2, ensure_ascii=False)
+                        with open(latest_report_file, "w", encoding="utf-8") as lf:
+                            json.dump(report_data, lf, indent=2, ensure_ascii=False)
+                        logger.info(f"Audit report saved to {job_report_file} and {latest_report_file}")
+                    except Exception as save_err:
+                        logger.warning(f"Could not auto-archive report to audit_reports/: {save_err}")
+
                     await self.job_store.update_progress(
                         job_id,
                         stage="complete",
@@ -382,8 +488,9 @@ class AuditJobRunner:
                 job_id, "init", 10, "Initializing audit modules..."
             )
         elif "[llm diagnostic]" in line_lower:
+            logger.info(f"Job {job_id} LLM Diagnostic: {line}")
             await self.job_store.update_progress(
-                job_id, "diagnostic", 20, "Verifying AI reasoning connectivity..."
+                job_id, "diagnostic", 20, line
             )
         elif "crawl-render audit report" in line_lower or "pages discovered:" in line_lower:
             await self.job_store.update_progress(

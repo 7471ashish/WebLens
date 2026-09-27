@@ -508,6 +508,153 @@ body {
   border-radius: 8px;
   padding: 12px 14px;
   box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.site-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+}
+
+.btn-export:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+/* Pre-Flight Security Box */
+.preflight-box {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preflight-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preflight-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.preflight-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2e7d5a;
+  box-shadow: 0 0 0 0 rgba(46, 125, 90, 0.5);
+  animation: preflight-pulse 1.8s infinite;
+}
+
+@keyframes preflight-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(46, 125, 90, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(46, 125, 90, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(46, 125, 90, 0);
+  }
+}
+
+.preflight-score-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.preflight-score-badge.high {
+  background: #eef8f2;
+  color: #2e7d5a;
+  border-color: #c8ebd5;
+}
+
+.preflight-score-badge.med {
+  background: #fdf8ed;
+  color: #b87b28;
+  border-color: #faeac7;
+}
+
+.preflight-score-badge.low {
+  background: #fdf2f0;
+  color: #c84032;
+  border-color: #f8d7d3;
+}
+
+.preflight-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preflight-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  padding: 2.5px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.preflight-chip.pass {
+  background: #eef8f2;
+  color: #2e7d5a;
+  border-color: #c8ebd5;
+}
+
+.preflight-chip.fail {
+  background: #fdf2f0;
+  color: #c84032;
+  border-color: #f8d7d3;
+}
+
+.preflight-chip.info {
+  background: #f2f5f7;
+  color: #546e7a;
+  border-color: #dbe4e9;
 }
 
 .site-title {
@@ -1101,6 +1248,62 @@ body {
 .action-text {
   color: var(--text-primary);
   line-height: 1.45;
+}
+
+.finding-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.card-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.copy-prompt-btn {
+  background: var(--bg-secondary);
+  color: var(--accent-color);
+  border: 1px solid rgba(217, 119, 87, 0.35);
+}
+
+.copy-prompt-btn:hover {
+  background: var(--accent-color);
+  color: #ffffff;
+  border-color: var(--accent-color);
+}
+
+.copy-prompt-btn.copied {
+  background: #2e7d5a !important;
+  color: #ffffff !important;
+  border-color: #2e7d5a !important;
+}
+
+.locate-dom-btn {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.locate-dom-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: #d8d4ca;
+}
+
+.locate-dom-btn.locating {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 /* Telemetry Footer */

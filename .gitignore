@@ -36,6 +36,7 @@ htmlcov/
 # Audit Runtime Outputs & Temporary Sandboxes
 output.json
 output_*.json
+audit_reports/
 weblens_*
 scratch/
 temp/
