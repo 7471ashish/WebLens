@@ -60,8 +60,35 @@ async def lifespan(app: FastAPI):
     except ImportError:
         logger.warning("Playwright is NOT installed in this Python environment!")
 
+    # Optional keep-alive task to prevent Render free-tier sleep
+    keep_alive_url = os.environ.get("KEEP_ALIVE_URL", "").strip()
+    keep_alive_task = None
+    if keep_alive_url:
+        async def _keep_alive_pinger():
+            logger.info(f"Keep-Alive pinger started for: {keep_alive_url} (interval: 10m)")
+            await asyncio.sleep(60)  # Initial grace period after startup
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                while True:
+                    try:
+                        resp = await client.get(keep_alive_url)
+                        logger.info(f"Keep-Alive ping to {keep_alive_url} returned HTTP {resp.status_code}")
+                    except Exception as err:
+                        logger.warning(f"Keep-Alive ping failed: {err}")
+                    await asyncio.sleep(600)  # Ping every 10 minutes
+
+        keep_alive_task = asyncio.create_task(_keep_alive_pinger())
+
     yield
+
+    if keep_alive_task and not keep_alive_task.done():
+        keep_alive_task.cancel()
+        try:
+            await keep_alive_task
+        except asyncio.CancelledError:
+            pass
+
     logger.info("WebLens Audit Backend shutting down...")
+
 
 
 app = FastAPI(

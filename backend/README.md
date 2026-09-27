@@ -74,3 +74,36 @@ Or directly with Docker:
 docker build -f backend/Dockerfile -t weblens-backend .
 docker run -p 8000:8000 weblens-backend
 ```
+
+---
+
+## Deploying to Render & Keep-Alive Setup
+
+### 1. Render Deployment (Blueprint or Web Service)
+1. Push this repository to GitHub (`git push origin main`).
+2. Go to [Render Dashboard](https://dashboard.render.com).
+3. Click **New +** -> **Blueprint** and select your GitHub repo `WebLens` (it will auto-detect [`render.yaml`](../render.yaml)).
+   - Or click **New +** -> **Web Service**:
+     - Environment: **Docker**
+     - Root Directory: `.`
+     - Dockerfile Path: `backend/Dockerfile`
+     - Plan: **Free**
+     - Health Check Path: `/health`
+     - Env Var `MAX_CONCURRENT_JOBS`: `2`
+     - Env Var `KEEP_ALIVE_URL`: `https://your-service-name.onrender.com/health` (optional internal ping)
+
+### 2. Cron Job Setup (Never Sleep / Keep-Alive)
+Render free tier puts web services to sleep after 15 minutes of inactivity. To prevent this, two automatic methods are provided:
+
+#### Option A: GitHub Actions Cron (Built-in)
+The workflow [`.github/workflows/keep_alive.yml`](../.github/workflows/keep_alive.yml) runs every 10 minutes automatically.
+1. In your GitHub repository, go to **Settings** -> **Secrets and variables** -> **Actions**.
+2. Click **New repository secret** or **New repository variable**.
+3. Name: `RENDER_BACKEND_URL`
+4. Value: `https://your-app-name.onrender.com` (your deployed Render service URL).
+
+#### Option B: Free External Cron (cron-job.org / UptimeRobot)
+1. Go to [cron-job.org](https://cron-job.org) or [uptimerobot.com](https://uptimerobot.com).
+2. Create a free HTTP monitor/cron pointing to: `https://your-app-name.onrender.com/health`
+3. Schedule: Every **10 minutes** or **14 minutes**.
+

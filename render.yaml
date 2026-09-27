@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: weblens-backend
+    runtime: docker
+    dockerContext: .
+    dockerfilePath: backend/Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: MAX_CONCURRENT_JOBS
+        value: "2"
+      - key: JOB_TIMEOUT_SECONDS
+        value: "260.0"
+      - key: AGENT_SOURCE_DIR
+        value: /app/agent
+      - key: AUDIT_ALLOW_LOCAL
+        value: "false"
+      - key: KEEP_ALIVE_URL
+        sync: false

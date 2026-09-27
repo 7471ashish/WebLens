@@ -23,9 +23,23 @@ const settingsPanel = document.getElementById("settings-panel");
 const closeSettingsBtn = document.getElementById("close-settings-btn");
 const groqKeyInput = document.getElementById("groq-key-input");
 const togglePwdBtn = document.getElementById("toggle-pwd-btn");
+const backendUrlInput = document.getElementById("backend-url-input");
+const resetBackendBtn = document.getElementById("reset-backend-btn");
 const testConnectionBtn = document.getElementById("test-connection-btn");
 const saveSettingsBtn = document.getElementById("save-settings-btn");
 const connectionStatus = document.getElementById("connection-status");
+
+async function getActiveBackendUrl() {
+  try {
+    const { backend_url } = await chrome.storage.local.get(["backend_url"]);
+    if (backend_url && backend_url.trim()) {
+      return backend_url.trim().replace(/\/+$/, "");
+    }
+  } catch (err) {
+    console.warn("[WebLens] Failed to read backend_url from storage:", err);
+  }
+  return DEFAULT_BACKEND_URL;
+}
 
 // Audit Tabs Bar
 const tabsBar = document.getElementById("audit-tabs");
@@ -129,6 +143,11 @@ function setupEventListeners() {
   });
   closeSettingsBtn.addEventListener("click", closeSettingsPanel);
   togglePwdBtn.addEventListener("click", togglePasswordVisibility);
+  if (resetBackendBtn) {
+    resetBackendBtn.addEventListener("click", () => {
+      if (backendUrlInput) backendUrlInput.value = DEFAULT_BACKEND_URL;
+    });
+  }
   testConnectionBtn.addEventListener("click", testBackendConnection);
   saveSettingsBtn.addEventListener("click", saveSettings);
   syncTabBtn.addEventListener("click", syncActiveTabUrl);
@@ -203,8 +222,11 @@ async function toggleSettingsPanel() {
 }
 
 async function openSettingsPanel() {
-  const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
+  const { groq_api_key, backend_url } = await chrome.storage.local.get(["groq_api_key", "backend_url"]);
   groqKeyInput.value = groq_api_key || "";
+  if (backendUrlInput) {
+    backendUrlInput.value = backend_url || DEFAULT_BACKEND_URL;
+  }
   connectionStatus.classList.add("hidden");
 
   popIcon(openSettingsBtn);
@@ -247,9 +269,11 @@ function togglePasswordVisibility() {
 }
 
 async function testBackendConnection() {
-  const targetUrl = DEFAULT_BACKEND_URL;
+  const rawTarget = backendUrlInput ? backendUrlInput.value.trim() : "";
+  const targetUrl = (rawTarget || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+
   connectionStatus.className = "status-badge";
-  connectionStatus.textContent = "Connecting to backend...";
+  connectionStatus.textContent = `Connecting to ${targetUrl}...`;
   connectionStatus.classList.remove("hidden");
 
   try {
@@ -260,25 +284,28 @@ async function testBackendConnection() {
     connectionStatus.textContent = `Connected! Backend ready (Playwright: ${data.playwright_ready ? "Ready" : "Offline fallback"}, Slots: ${data.max_concurrent_jobs})`;
   } catch (err) {
     connectionStatus.className = "status-badge error";
-    connectionStatus.textContent = `Connection failed: ${err.message}. Ensure backend is running.`;
+    connectionStatus.textContent = `Connection failed to ${targetUrl}: ${err.message}. Ensure backend is running.`;
   }
 }
 
 /**
- * Groq key is stored in chrome.storage.local and picked back up automatically
- * on every future audit request -- see submitAuditJob(), which reads it fresh
- * from storage each time rather than keeping it only in memory.
+ * Groq key and Backend URL are stored in chrome.storage.local and picked back up automatically
+ * on every future audit request -- see submitAuditJob().
  */
 async function saveSettings() {
   const key = groqKeyInput.value.trim();
+  const rawBackend = backendUrlInput ? backendUrlInput.value.trim() : "";
+  const normalizedBackend = rawBackend ? rawBackend.replace(/\/+$/, "") : DEFAULT_BACKEND_URL;
 
   await chrome.storage.local.set({
     groq_api_key: key,
+    backend_url: normalizedBackend,
   });
 
   await checkConfiguredKey();
   closeSettingsPanel();
 }
+
 
 async function checkConfiguredKey() {
   const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
@@ -333,7 +360,7 @@ async function restoreSession() {
   jobs = Array.isArray(stored.weblens_jobs) ? stored.weblens_jobs : [];
   activeTabId = stored.weblens_active_tab_id || (jobs.length ? jobs[jobs.length - 1].id : null);
 
-  const activeBackend = DEFAULT_BACKEND_URL;
+  const activeBackend = await getActiveBackendUrl();
 
   jobs.forEach((job) => {
     if ((job.status === "queued" || job.status === "running") && job.jobId) {
@@ -403,7 +430,7 @@ async function retryAudit() {
 /** POSTs a job to the backend and, on success, opens its SSE stream. */
 async function submitAuditJob(job) {
   const { groq_api_key } = await chrome.storage.local.get(["groq_api_key"]);
-  const activeBackend = DEFAULT_BACKEND_URL;
+  const activeBackend = await getActiveBackendUrl();
   const activeKey = groq_api_key ? groq_api_key.trim() : "placeholder_key";
 
   startAuditBtn.disabled = true;
@@ -451,7 +478,7 @@ async function terminateAudit() {
   const job = getActiveJob();
   if (!job || (job.status !== "queued" && job.status !== "running")) return;
 
-  const activeBackend = DEFAULT_BACKEND_URL;
+  const activeBackend = await getActiveBackendUrl();
 
   const es = eventSources[job.id];
   if (es) {

@@ -1,0 +1,38 @@
+name: Render Backend Keep-Alive Cron
+
+on:
+  schedule:
+    # Runs every 10 minutes (Render free tier spins down after 15 mins of inactivity)
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  ping-render:
+    name: Ping Backend Health Endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Keep-Alive Ping
+        run: |
+          URL="${{ secrets.RENDER_BACKEND_URL || vars.RENDER_BACKEND_URL }}"
+          
+          if [ -z "$URL" ]; then
+            echo "❌ Error: Neither secrets.RENDER_BACKEND_URL nor vars.RENDER_BACKEND_URL is configured."
+            echo "👉 Go to GitHub Repo -> Settings -> Secrets and variables -> Actions"
+            echo "👉 Add a Secret or Variable named RENDER_BACKEND_URL with your Render URL (e.g. https://weblens-backend.onrender.com)"
+            exit 1
+          fi
+
+          BASE_URL="${URL%/}"
+          HEALTH_URL="$BASE_URL/health"
+
+          echo "📡 Sending keep-alive ping to $HEALTH_URL..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 "$HEALTH_URL" || echo "000")
+          echo "✅ Response HTTP Status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 301 ] || [ "$HTTP_STATUS" -eq 302 ]; then
+            echo "🎉 Render backend is awake and healthy!"
+          else
+            echo "⚠️ Health endpoint responded with $HTTP_STATUS, attempting base URL wake-up..."
+            curl -s -m 45 "$BASE_URL" > /dev/null || true
+            echo "Ping cycle completed."
+          fi
