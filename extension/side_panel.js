@@ -907,108 +907,79 @@ function renderFindingsList(findings) {
  * Also handles the legacy "(source:..., field:..., value:..., details:...)"
  * tail format and falls back to plain text for anything else.
  */
-function renderEvidence(evidence) {
-  if (evidence === null || evidence === undefined || evidence === "") {
-    return `<p class="evidence-text">No evidence recorded.</p>`;
-  }
+/**
+ * Character-by-character lexer that converts Python dict/list literals
+ * (single quotes, True/False/None) into valid JSON objects or arrays.
+ * Handles escaped characters, apostrophes in natural English sentences,
+ * booleans, null, numbers, and nested structures without crashing.
+ */
+function pyToJson(str) {
+  if (!str || typeof str !== "string") return null;
+  const s = str.trim();
+  if (!s.startsWith("{") && !s.startsWith("[")) return null;
 
-  if (typeof evidence !== "string") {
-    return renderMetaRows(objectToPairs(evidence));
-  }
+  let out = "";
+  let i = 0;
+  const len = s.length;
 
-  // ── Legacy format: (source: ..., field: ..., value: {...}, details: ...) ──
-  const legacyMatch = evidence.match(
-    /^(.*?)\s*\(source:\s*([^,]+),\s*field:\s*([^,]+),\s*value:\s*(\{.*\})\s*,\s*details:\s*(.*)\)\s*$/s
-  );
-  if (legacyMatch) {
-    const [, text, source, field, value, details] = legacyMatch;
-    let html = "";
-    if (text.trim()) html += `<p class="evidence-text">${escapeHtml(text.trim())}</p>`;
-    html += `<div class="evidence-meta">`;
-    html += metaRow("Source", escapeHtml(source.trim()));
-    html += metaRow("Field", escapeHtml(field.trim()));
-    const parsedValue = tryParsePyDict(value.trim());
-    html += metaStackRow("Value", parsedValue ? chipGroup(objectToPairs(parsedValue)) : escapeHtml(value.trim()));
-    const detailPairs = splitTopLevel(details.trim(), ",").map((part) => {
-      const idx = part.indexOf(":");
-      return idx === -1 ? [null, part] : [part.slice(0, idx).trim(), part.slice(idx + 1).trim()];
-    });
-    html += metaStackRow("Details", chipGroup(detailPairs));
-    html += `</div>`;
-    return html;
-  }
+  while (i < len) {
+    const ch = s[i];
 
-  // ── Current backend format ──
-  // Split on "Sample telemetry:" to separate prose from data
-  const telemetryIdx = evidence.indexOf("Sample telemetry:");
-  const prosePart = telemetryIdx === -1 ? evidence.trim() : evidence.slice(0, telemetryIdx).trim();
-  const telemetryPart = telemetryIdx === -1 ? null : evidence.slice(telemetryIdx + "Sample telemetry:".length).trim();
-
-  let html = "";
-  if (prosePart) {
-    html += `<p class="evidence-text">${escapeHtml(prosePart)}</p>`;
-  }
-
-  if (telemetryPart) {
-    // Parse: URL 'https://...' (page_type): <data>
-    // There can be multiple such entries separated by newlines
-    const entries = telemetryPart.split(/\n(?=URL\s+')/);
-    const blocks = entries.map((entry) => {
-      const urlMatch = entry.match(/^URL\s+'([^']+)'\s+\(([^)]+)\)\s*:\s*([\s\S]*)$/);
-      if (!urlMatch) return `<p class="evidence-text">${escapeHtml(entry.trim())}</p>`;
-      const [, url, pageType, rawData] = urlMatch;
-      const data = rawData.trim();
-      const parsed = tryParsePyList(data) || tryParsePyDict(data);
-      let dataHtml;
-      if (parsed && typeof parsed === "object") {
-        if (Array.isArray(parsed)) {
-          if (parsed.length === 0) {
-            dataHtml = `<span class="evidence-empty-list">[ ]</span>`;
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      i++;
+      let strVal = "";
+      while (i < len) {
+        if (s[i] === "\\") {
+          if (i + 1 < len) {
+            strVal += s[i + 1];
+            i += 2;
           } else {
-            dataHtml = parsed.map((item) => {
-              if (item && typeof item === "object") {
-                const pairs = Object.entries(item).filter(([, v]) => v !== null && v !== undefined && v !== "");
-                return pairs.length ? chipGroup(pairs) : `<span class="evidence-empty-list">{ }</span>`;
-              }
-              return `<span class="stat-chip"><span class="stat-chip-val">${escapeHtml(String(item))}</span></span>`;
-            }).join("");
+            i++;
           }
+        } else if (s[i] === quote) {
+          i++;
+          break;
         } else {
-          const pairs = Object.entries(parsed).filter(([, v]) => v !== null && v !== undefined);
-          dataHtml = pairs.length ? chipGroup(pairs) : `<span class="evidence-empty-list">{ }</span>`;
+          strVal += s[i];
+          i++;
         }
-      } else {
-        dataHtml = `<code class="evidence-raw">${escapeHtml(data)}</code>`;
       }
-      return `
-        <div class="telemetry-block">
-          <div class="telemetry-block-url">
-            <span class="tel-page-type">${escapeHtml(pageType)}</span>
-            <a class="tel-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>
-          </div>
-          <div class="telemetry-block-data stat-chip-group">${dataHtml}</div>
-        </div>`;
-    });
-    html += `<div class="telemetry-section"><span class="telemetry-label">Sample telemetry</span>${blocks.join("")}</div>`;
+      out += JSON.stringify(strVal);
+    } else {
+      if (s.startsWith("True", i) && !/[a-zA-Z0-9_]/.test(s[i + 4] || "")) {
+        out += "true";
+        i += 4;
+      } else if (s.startsWith("False", i) && !/[a-zA-Z0-9_]/.test(s[i + 5] || "")) {
+        out += "false";
+        i += 5;
+      } else if (s.startsWith("None", i) && !/[a-zA-Z0-9_]/.test(s[i + 4] || "")) {
+        out += "null";
+        i += 4;
+      } else {
+        out += ch;
+        i++;
+      }
+    }
   }
 
-  return html || `<p class="evidence-text">No evidence recorded.</p>`;
+  try {
+    return JSON.parse(out);
+  } catch (err) {
+    return null;
+  }
 }
 
 /** Parses a Python-style list literal (single quotes, True/False/None). */
 function tryParsePyList(str) {
-  if (!str.startsWith("[")) return null;
-  try {
-    const jsonish = str
-      .replace(/'/g, '"')
-      .replace(/\bTrue\b/g, "true")
-      .replace(/\bFalse\b/g, "false")
-      .replace(/\bNone\b/g, "null");
-    const parsed = JSON.parse(jsonish);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const res = pyToJson(str);
+  return Array.isArray(res) ? res : null;
+}
+
+/** Parses a Python-style dict literal (single quotes, True/False/None) as JSON. */
+function tryParsePyDict(str) {
+  const res = pyToJson(str);
+  return res && typeof res === "object" && !Array.isArray(res) ? res : null;
 }
 
 function metaRow(label, valueHtml) {
@@ -1023,6 +994,10 @@ function chipGroup(pairs) {
   const chips = pairs
     .map(([k, v]) => {
       const keyHtml = k ? `<span class="stat-chip-key">${escapeHtml(k)}</span>` : "";
+      if (Array.isArray(v)) {
+        const itemChips = v.map((item) => `<span class="stat-chip-subval">${escapeHtml(String(item))}</span>`).join(" ");
+        return `<span class="stat-chip">${keyHtml}<span class="stat-chip-val">${itemChips}</span></span>`;
+      }
       return `<span class="stat-chip">${keyHtml}<span class="stat-chip-val">${escapeHtml(String(v))}</span></span>`;
     })
     .join("");
@@ -1041,19 +1016,50 @@ function objectToPairs(obj) {
   return Object.entries(obj);
 }
 
-/** Parses a Python-style dict literal (single quotes, True/False/None) as JSON. */
-function tryParsePyDict(str) {
-  try {
-    const jsonish = str
-      .replace(/'/g, '"')
-      .replace(/\bTrue\b/g, "true")
-      .replace(/\bFalse\b/g, "false")
-      .replace(/\bNone\b/g, "null");
-    const parsed = JSON.parse(jsonish);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
+/** Formats parsed objects or arrays into human-friendly cards, chips, or editorial quote boxes. */
+function formatParsedData(parsed) {
+  if (parsed === null || parsed === undefined) return "";
+  if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return `<span class="evidence-empty-list">[ ]</span>`;
+    const items = parsed.map((item) => {
+      if (typeof item === "string" && (item.startsWith("{") || item.startsWith("["))) {
+        const sub = pyToJson(item);
+        if (sub) return formatParsedData(sub);
+      }
+      if (item && typeof item === "object") {
+        const pairs = Object.entries(item).filter(([, v]) => v !== null && v !== undefined && v !== "");
+        return pairs.length ? chipGroup(pairs) : `<span class="evidence-empty-list">{ }</span>`;
+      }
+      return `<span class="stat-chip"><span class="stat-chip-val">${escapeHtml(String(item))}</span></span>`;
+    }).join("");
+    return `<div class="stat-chip-group">${items}</div>`;
   }
+  if (typeof parsed === "object") {
+    // If it has long prose fields like qualitative_critique, separate them into editorial quote boxes
+    const proseKeys = ["qualitative_critique", "critique", "notes", "description"];
+    const pairs = [];
+    let proseHtml = "";
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v === null || v === undefined) continue;
+      if (proseKeys.includes(k) && typeof v === "string") {
+        proseHtml += `<div class="evidence-critique-box"><span class="critique-label">${escapeHtml(k)}:</span> <span class="critique-text">${escapeHtml(v)}</span></div>`;
+      } else {
+        pairs.push([k, v]);
+      }
+    }
+    let html = "";
+    if (pairs.length) html += chipGroup(pairs);
+    if (proseHtml) html += proseHtml;
+    return html;
+  }
+  return `<span class="stat-chip"><span class="stat-chip-val">${escapeHtml(String(parsed))}</span></span>`;
+}
+
+function highlightTextUrls(html) {
+  return html.replace(
+    /(https?:\/\/[^\s"'<>()]+)/g,
+    '<a class="tel-url inline" href="$1" target="_blank" rel="noopener">$1</a>'
+  );
 }
 
 /** Splits on a separator at brace/bracket depth 0, so nested {..}/[..] survive intact. */
@@ -1083,6 +1089,173 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+/**
+ * Parses all backend evidence string patterns:
+ *  1. Legacy "(source:..., field:..., value:..., details:...)"
+ *  2. Direct URL block "URL '<url>' (<page_type>): <data>"
+ *  3. Multi-page rollup with "Sample telemetry:" prefix (lists & newline entries)
+ *  4. Parenthetical telemetry "(key: val; key: val)" with nav items
+ *  5. Linkified text fallback
+ */
+function renderEvidence(evidence) {
+  if (evidence === null || evidence === undefined || evidence === "") {
+    return `<p class="evidence-text">No evidence recorded.</p>`;
+  }
+
+  if (typeof evidence !== "string") {
+    return formatParsedData(evidence);
+  }
+
+  // 1. Legacy format: (source: ..., field: ..., value: {...}, details: ...)
+  const legacyMatch = evidence.match(
+    /^(.*?)\s*\(source:\s*([^,]+),\s*field:\s*([^,]+),\s*value:\s*(\{.*\})\s*,\s*details:\s*(.*)\)\s*$/s
+  );
+  if (legacyMatch) {
+    const [, text, source, field, value, details] = legacyMatch;
+    let html = "";
+    if (text.trim()) html += `<p class="evidence-text">${escapeHtml(text.trim())}</p>`;
+    html += `<div class="evidence-meta">`;
+    html += metaRow("Source", escapeHtml(source.trim()));
+    html += metaRow("Field", escapeHtml(field.trim()));
+    const parsedValue = pyToJson(value.trim());
+    html += metaStackRow("Value", parsedValue ? formatParsedData(parsedValue) : escapeHtml(value.trim()));
+    const detailPairs = splitTopLevel(details.trim(), ",").map((part) => {
+      const idx = part.indexOf(":");
+      return idx === -1 ? [null, part] : [part.slice(0, idx).trim(), part.slice(idx + 1).trim()];
+    });
+    html += metaStackRow("Details", chipGroup(detailPairs));
+    html += `</div>`;
+    return html;
+  }
+
+  // 2. Direct URL + Data format (without 'Sample telemetry:' prefix)
+  // Example: URL 'https://...' (homepage): <dict or list or text>
+  const directUrlMatch = evidence.match(/^URL\s+'([^']+)'\s+\(([^)]+)\)\s*:\s*([\s\S]*)$/);
+  if (directUrlMatch) {
+    const [, url, pageType, rawData] = directUrlMatch;
+    const trimmedData = rawData.trim();
+    const parsed = pyToJson(trimmedData);
+    const dataHtml = parsed ? formatParsedData(parsed) : `<p class="evidence-text">${escapeHtml(trimmedData)}</p>`;
+    return `
+      <div class="telemetry-block standalone">
+        <div class="telemetry-block-url">
+          <span class="tel-page-type">${escapeHtml(pageType)}</span>
+          <a class="tel-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>
+        </div>
+        <div class="telemetry-block-data">${dataHtml}</div>
+      </div>`;
+  }
+
+  // 3. Multi-page rollup with 'Sample telemetry:' prefix
+  if (evidence.includes("Sample telemetry:")) {
+    const telemetryIdx = evidence.indexOf("Sample telemetry:");
+    const prosePart = evidence.slice(0, telemetryIdx).trim();
+    const telemetryPart = evidence.slice(telemetryIdx + "Sample telemetry:".length).trim();
+
+    let html = "";
+    if (prosePart) html += `<p class="evidence-text">${escapeHtml(prosePart)}</p>`;
+
+    // Check if telemetryPart is a list of items or strings
+    const parsedList = pyToJson(telemetryPart);
+    if (Array.isArray(parsedList)) {
+      const listItems = parsedList.map((item) => {
+        if (typeof item === "string") {
+          // Check if item string itself is a URL '...' (page_type): ...
+          const itemUrlMatch = item.match(/^URL\s+'([^']+)'\s+\(([^)]+)\)\s*:\s*([\s\S]*)$/);
+          if (itemUrlMatch) {
+            const [, url, pageType, rawData] = itemUrlMatch;
+            const parsedData = pyToJson(rawData.trim());
+            return `
+              <div class="telemetry-block">
+                <div class="telemetry-block-url">
+                  <span class="tel-page-type">${escapeHtml(pageType)}</span>
+                  <a class="tel-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>
+                </div>
+                <div class="telemetry-block-data">${formatParsedData(parsedData || rawData)}</div>
+              </div>`;
+          }
+          return `<div class="telemetry-bullet-item"><span class="bullet-dot">•</span> <span>${escapeHtml(item)}</span></div>`;
+        }
+        return `<div class="telemetry-bullet-item">${formatParsedData(item)}</div>`;
+      }).join("");
+
+      html += `<div class="telemetry-section"><span class="telemetry-label">Sample Telemetry</span><div class="telemetry-list">${listItems}</div></div>`;
+      return html;
+    }
+
+    // Split on newlines if multiple URL '...' entries
+    const entries = telemetryPart.split(/\n(?=URL\s+')/);
+    const blocks = entries.map((entry) => {
+      const urlMatch = entry.match(/^URL\s+'([^']+)'\s+\(([^)]+)\)\s*:\s*([\s\S]*)$/);
+      if (!urlMatch) {
+        return `<p class="evidence-text">${escapeHtml(entry.trim())}</p>`;
+      }
+      const [, url, pageType, rawData] = urlMatch;
+      const parsed = pyToJson(rawData.trim());
+      return `
+        <div class="telemetry-block">
+          <div class="telemetry-block-url">
+            <span class="tel-page-type">${escapeHtml(pageType)}</span>
+            <a class="tel-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>
+          </div>
+          <div class="telemetry-block-data">${formatParsedData(parsed || rawData.trim())}</div>
+        </div>`;
+    });
+    html += `<div class="telemetry-section"><span class="telemetry-label">Sample Telemetry</span>${blocks.join("")}</div>`;
+    return html;
+  }
+
+  // 4. Parenthetical telemetry format: Text... (key: val; key: val)
+  // Example: Primary navigation menu contains 20 items... (nav_item_count: 20; items: [...])
+  const parenMatch = evidence.match(/^(.*?)\s*\((([a-zA-Z0-9_]+:\s*[^;)]+)(;\s*[a-zA-Z0-9_]+:\s*[^;)]+)*)\)\s*$/s);
+  if (parenMatch) {
+    const [, prose, telemetryContent] = parenMatch;
+    let html = "";
+    if (prose.trim()) html += `<p class="evidence-text">${escapeHtml(prose.trim())}</p>`;
+
+    const parts = splitTopLevel(telemetryContent.trim(), ";");
+    const pairs = [];
+    for (const part of parts) {
+      const cIdx = part.indexOf(":");
+      if (cIdx !== -1) {
+        const k = part.slice(0, cIdx).trim();
+        const vRaw = part.slice(cIdx + 1).trim();
+        const vParsed = pyToJson(vRaw);
+        pairs.push([k, vParsed !== null ? vParsed : vRaw]);
+      }
+    }
+    if (pairs.length) {
+      const chips = pairs.map(([k, v]) => {
+        if (Array.isArray(v)) {
+          // If items is a list of nav items or objects
+          const listHtml = v.map((item) => {
+            if (typeof item === "string" && item.startsWith("{")) {
+              const subObj = pyToJson(item);
+              if (subObj) {
+                const label = subObj.label || subObj.text || subObj.name || "";
+                const href = subObj.href || "";
+                if (href) {
+                  return `<a class="nav-chip-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label || href)}</a>`;
+                }
+                return `<span class="nav-chip">${escapeHtml(label)}</span>`;
+              }
+            }
+            return `<span class="nav-chip">${escapeHtml(String(item))}</span>`;
+          }).join(" ");
+          return `<div class="evidence-meta-row evidence-meta-stack"><span class="meta-key">${escapeHtml(k)}</span><div class="nav-chip-group">${listHtml}</div></div>`;
+        }
+        return metaRow(escapeHtml(k), escapeHtml(String(v)));
+      }).join("");
+
+      html += `<div class="evidence-meta">${chips}</div>`;
+      return html;
+    }
+  }
+
+  // 5. Fallback: Clean formatted text with highlighted URLs
+  return `<p class="evidence-text">${highlightTextUrls(escapeHtml(evidence))}</p>`;
 }
 
 async function getOrCreateInstallId() {
