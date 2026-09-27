@@ -24,15 +24,13 @@ const settingsPanel = document.getElementById("settings-panel");
 const closeSettingsBtn = document.getElementById("close-settings-btn");
 const groqKeyInput = document.getElementById("groq-key-input");
 const backendUrlInput = document.getElementById("backend-url-input");
-const togglePwdBtn = document.getElementById("toggle-pwd-btn");
-const backendUrlInput = document.getElementById("backend-url-input");
 const resetBackendBtn = document.getElementById("reset-backend-btn");
+const togglePwdBtn = document.getElementById("toggle-pwd-btn");
 const testConnectionBtn = document.getElementById("test-connection-btn");
 const saveSettingsBtn = document.getElementById("save-settings-btn");
 const connectionStatus = document.getElementById("connection-status");
 
 async function getActiveBackendUrl() {
-<<<<<<< Updated upstream
   try {
     const { backend_url } = await browserApi.storage.local.get(["backend_url"]);
     if (backend_url && backend_url.trim()) {
@@ -42,11 +40,6 @@ async function getActiveBackendUrl() {
     console.warn("[WebLens] Failed to read backend_url from storage:", err);
   }
   return DEFAULT_BACKEND_URL;
-=======
-  const { backend_url } = await browserApi.storage.local.get(["backend_url"]);
-  const raw = (backend_url && backend_url.trim()) || DEFAULT_BACKEND_URL;
-  return raw.replace(/\/+$/, "");
->>>>>>> Stashed changes
 }
 
 // Audit Tabs Bar
@@ -277,18 +270,10 @@ function togglePasswordVisibility() {
 }
 
 async function testBackendConnection() {
-<<<<<<< Updated upstream
-  const rawTarget = backendUrlInput ? backendUrlInput.value.trim() : "";
-  const targetUrl = (rawTarget || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
-
-  connectionStatus.className = "status-badge";
-  connectionStatus.textContent = `Connecting to ${targetUrl}...`;
-=======
   const inputVal = backendUrlInput ? backendUrlInput.value.trim() : "";
   const targetUrl = (inputVal || (await getActiveBackendUrl())).replace(/\/+$/, "");
   connectionStatus.className = "status-badge";
-  connectionStatus.textContent = "Connecting to backend (may take ~30s if waking from idle)...";
->>>>>>> Stashed changes
+  connectionStatus.textContent = `Connecting to ${targetUrl} (may take ~30s if waking from idle)...`;
   connectionStatus.classList.remove("hidden");
 
   try {
@@ -299,11 +284,7 @@ async function testBackendConnection() {
     connectionStatus.textContent = `Connected! Backend ready (Playwright: ${data.playwright_ready ? "Ready" : "Offline fallback"}, Slots: ${data.max_concurrent_jobs})`;
   } catch (err) {
     connectionStatus.className = "status-badge error";
-<<<<<<< Updated upstream
-    connectionStatus.textContent = `Connection failed to ${targetUrl}: ${err.message}. Ensure backend is running.`;
-=======
     connectionStatus.textContent = `Connection failed: ${err.message}. If using Render free tier, server may be waking up (please retry).`;
->>>>>>> Stashed changes
   }
 }
 
@@ -313,20 +294,12 @@ async function testBackendConnection() {
  */
 async function saveSettings() {
   const key = groqKeyInput.value.trim();
-<<<<<<< Updated upstream
   const rawBackend = backendUrlInput ? backendUrlInput.value.trim() : "";
   const normalizedBackend = rawBackend ? rawBackend.replace(/\/+$/, "") : DEFAULT_BACKEND_URL;
 
   await browserApi.storage.local.set({
     groq_api_key: key,
     backend_url: normalizedBackend,
-=======
-  const url = backendUrlInput ? backendUrlInput.value.trim().replace(/\/+$/, "") : "";
-
-  await browserApi.storage.local.set({
-    groq_api_key: key,
-    backend_url: url || DEFAULT_BACKEND_URL,
->>>>>>> Stashed changes
   });
 
   await checkConfiguredKey();
