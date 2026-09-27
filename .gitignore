@@ -37,7 +37,7 @@ htmlcov/
 output.json
 output_*.json
 audit_reports/
-weblens_*
+/weblens_*
 scratch/
 temp/
 tmp/
