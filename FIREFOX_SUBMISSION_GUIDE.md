@@ -24,8 +24,8 @@ python scripts/package_extensions.py
   - Chrome: `dist/chrome/`
   - Firefox: `dist/firefox/`
 - **Store-Ready Zip Archives:**
-  - Chrome Web Store: `dist/weblens-chrome-v1.0.0.zip`
-  - Mozilla Add-ons (AMO): `dist/weblens-firefox-v1.0.0.zip`
+  - Chrome Web Store: `dist/weblens-chrome-v1.0.1.zip`
+  - Mozilla Add-ons (AMO): `dist/weblens-firefox-v1.0.1.zip`
 
 ---
 
@@ -74,7 +74,7 @@ Publishing on Mozilla Add-ons (AMO) is **100% free** (no developer registration 
 3. **Upload Package:**
    - Click **Select a file...** and upload:
      ```
-     WebLens/dist/weblens-firefox-v1.0.0.zip
+     WebLens/dist/weblens-firefox-v1.0.1.zip
      ```
    - Mozilla's automated validator will scan the package (~10–20 seconds).
    - Ensure the validator gives a green checkmark.
@@ -97,7 +97,7 @@ Fill out the metadata form:
 
 | Field | Recommended Value |
 | :--- | :--- |
-| **Add-on Name** | `WebLens — AI Technical Health & Readiness Auditor` |
+| **Add-on Name** *(max 45 chars)* | `WebLens — AI Technical Health Auditor` |
 | **Summary** *(max 250 chars)* | `Autonomous technical website audit: AI discoverability, WCAG accessibility, rendering, and engagement friction.` |
 | **Categories** | `Web Development`, `Privacy & Security` |
 | **Tags** | `audit`, `developer-tools`, `accessibility`, `seo`, `performance`, `wcag` |
@@ -119,6 +119,21 @@ Features:
 - Standardized findings with measured evidence tiers (Tier 1/2 vs Tier 4 heuristic)
 - One-click ready-to-paste AI defect remediation prompts
 - Native Firefox sidebar integration
+```
+
+#### Notes to Reviewer:
+```text
+WebLens connects to a hosted backend API (https://weblens-backend-i7n8.onrender.com) to execute website technical diagnostics and stream real-time progress via Server-Sent Events (SSE).
+
+How to test:
+1. Open the WebLens sidebar (or click the toolbar icon).
+2. Click the gear icon to open Settings. The backend is preconfigured to:
+   https://weblens-backend-i7n8.onrender.com
+3. (Optional) Click "Test Connection" to confirm backend connectivity.
+4. Navigate to any public webpage (e.g., https://example.com) and click "Audit This Page".
+5. WebLens immediately runs an instant pre-flight security scan and displays live audit progress and findings in the sidebar.
+
+All source code is vanilla JavaScript/HTML/CSS without minification or obfuscation.
 ```
 
 ---

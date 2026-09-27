@@ -106,16 +106,22 @@ function main() {
   buildTarget('Chrome (MV3)', CHROME_DIST, 'manifest.chrome.json');
   buildTarget('Firefox (MV3 / Gecko)', FIREFOX_DIST, 'manifest.firefox.json');
 
-  createZip(CHROME_DIST, 'weblens-chrome-v1.0.0.zip');
-  createZip(FIREFOX_DIST, 'weblens-firefox-v1.0.0.zip');
+  const chromeManifest = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'manifest.chrome.json'), 'utf8'));
+  const firefoxManifest = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'manifest.firefox.json'), 'utf8'));
+
+  const chromeZip = `weblens-chrome-v${chromeManifest.version}.zip`;
+  const firefoxZip = `weblens-firefox-v${firefoxManifest.version}.zip`;
+
+  createZip(CHROME_DIST, chromeZip);
+  createZip(FIREFOX_DIST, firefoxZip);
 
   console.log('\n[WebLens Build] Build complete!');
   console.log('Unpacked directories:');
   console.log(`  - Chrome:  dist/chrome/ (Load in chrome://extensions)`);
   console.log(`  - Firefox: dist/firefox/ (Load in about:debugging#/runtime/this-firefox)`);
   console.log('Store Packages:');
-  console.log(`  - Chrome Web Store: dist/weblens-chrome-v1.0.0.zip`);
-  console.log(`  - Mozilla AMO:      dist/weblens-firefox-v1.0.0.zip\n`);
+  console.log(`  - Chrome Web Store: dist/${chromeZip}`);
+  console.log(`  - Mozilla AMO:      dist/${firefoxZip}\n`);
 }
 
 main();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebLens — AI Technical Health & Readiness Auditor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Autonomous technical website audit: AI discoverability, WCAG accessibility, rendering, and engagement friction.",
   "permissions": [
     "activeTab",
@@ -11,6 +11,7 @@
     "sidePanel"
   ],
   "host_permissions": [
+    "https://weblens-backend-i7n8.onrender.com/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8001/*",

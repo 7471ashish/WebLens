@@ -74,16 +74,25 @@ def main() -> None:
     build_target("Chrome (MV3)", CHROME_DIST, "manifest.chrome.json")
     build_target("Firefox (MV3 / Gecko)", FIREFOX_DIST, "manifest.firefox.json")
 
-    create_zip(CHROME_DIST, "weblens-chrome-v1.0.0.zip")
-    create_zip(FIREFOX_DIST, "weblens-firefox-v1.0.0.zip")
+    import json
+    with open(os.path.join(EXT_DIR, "manifest.chrome.json"), "r", encoding="utf-8") as f:
+        chrome_ver = json.load(f).get("version", "1.0.1")
+    with open(os.path.join(EXT_DIR, "manifest.firefox.json"), "r", encoding="utf-8") as f:
+        firefox_ver = json.load(f).get("version", "1.0.1")
+
+    chrome_zip = f"weblens-chrome-v{chrome_ver}.zip"
+    firefox_zip = f"weblens-firefox-v{firefox_ver}.zip"
+
+    create_zip(CHROME_DIST, chrome_zip)
+    create_zip(FIREFOX_DIST, firefox_zip)
 
     print("\n[WebLens Build] Build complete!")
     print("Unpacked directories:")
     print("  - Chrome:  dist/chrome/ (Load in chrome://extensions)")
     print("  - Firefox: dist/firefox/ (Load in about:debugging#/runtime/this-firefox)")
     print("Store Packages:")
-    print("  - Chrome Web Store: dist/weblens-chrome-v1.0.0.zip")
-    print("  - Mozilla AMO:      dist/weblens-firefox-v1.0.0.zip\n")
+    print(f"  - Chrome Web Store: dist/{chrome_zip}")
+    print(f"  - Mozilla AMO:      dist/{firefox_zip}\n")
 
 
 if __name__ == "__main__":

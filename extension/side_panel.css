@@ -304,12 +304,13 @@ body {
   position: relative;
 }
 
+.input-group > input,
 .input-with-action input {
   width: 100%;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 8px 36px 8px 12px;
+  padding: 8px 12px;
   color: var(--text-primary);
   font-size: 13px;
   outline: none;
@@ -317,6 +318,11 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+.input-with-action input {
+  padding-right: 36px;
+}
+
+.input-group > input:focus,
 .input-with-action input:focus {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.15);

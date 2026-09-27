@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "WebLens — AI Technical Health Auditor",
-  "version": "1.0.0",
+  "name": "WebLens - AI Technical Health Auditor",
+  "version": "1.0.1",
   "description": "Autonomous technical website audit: AI discoverability, WCAG accessibility, rendering, and engagement friction.",
   "browser_specific_settings": {
     "gecko": {
       "id": "weblens-auditor@weblens.ai",
-      "strict_min_version": "109.0"
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   "permissions": [
@@ -16,6 +19,7 @@
     "notifications"
   ],
   "host_permissions": [
+    "https://weblens-backend-i7n8.onrender.com/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8001/*",
