@@ -276,10 +276,10 @@ The workflow [`.github/workflows/keep_alive.yml`](../.github/workflows/keep_aliv
 1. In your GitHub repository, go to **Settings** -> **Secrets and variables** -> **Actions**.
 2. Click **New repository secret** or **New repository variable**.
 3. Name: `RENDER_BACKEND_URL`
-4. Value: `https://your-app-name.onrender.com` (your deployed Render service URL).
+4. Value: `https://weblens-backend-i7n8.onrender.com` (your live Render backend URL).
 
 #### Option B: Free External Cron (cron-job.org / UptimeRobot)
 1. Go to [cron-job.org](https://cron-job.org) or [uptimerobot.com](https://uptimerobot.com).
-2. Create a free HTTP monitor/cron pointing to: `https://your-app-name.onrender.com/health`
+2. Create a free HTTP monitor/cron pointing to: `https://weblens-backend-i7n8.onrender.com/health`
 3. Schedule: Every **10 minutes** or **14 minutes**.
 
